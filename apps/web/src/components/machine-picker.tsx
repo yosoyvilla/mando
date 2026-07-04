@@ -3,6 +3,8 @@ import { hubClient as defaultHubClient } from "@/lib/hub-client-instance";
 import type { HubClient, Machine } from "@/lib/hub-client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { StatusDot } from "@/components/status-dot";
+import { formatAbsoluteTime, formatRelativeTime } from "@/lib/format-time";
 import { ServerIcon, TrashIcon } from "@/components/icons/lucide";
 
 interface MachinePickerProps {
@@ -46,13 +48,13 @@ export function MachinePicker({
           machines: machines.filter((machine) => !machine.revokedAt),
         }),
       )
-      .catch((err) =>
+      .catch((err) => {
+        console.error("Failed to load machines:", err);
         setState({
           status: "error",
-          message:
-            err instanceof Error ? err.message : "Failed to load machines",
-        }),
-      );
+          message: "Couldn't load your machines. Check your connection and try again.",
+        });
+      });
   }, [client]);
 
   useEffect(() => {
@@ -72,8 +74,28 @@ export function MachinePicker({
 
   if (state.status === "loading") {
     return (
-      <div className="py-12 text-center text-muted-fg">
-        Loading machines...
+      <div
+        role="status"
+        aria-label="Loading machines"
+        className="grid gap-3 md:grid-cols-2"
+      >
+        <span className="sr-only">Loading machines…</span>
+        {[0, 1].map((i) => (
+          <div
+            key={i}
+            aria-hidden="true"
+            className="overflow-hidden rounded-lg border border-border/40 bg-bg shadow-xs"
+          >
+            <div className="flex items-center justify-between gap-2 px-3 py-2.5">
+              <div className="h-4 w-28 rounded motion-safe:animate-pulse bg-muted" />
+              <div className="h-5 w-16 rounded motion-safe:animate-pulse bg-muted" />
+            </div>
+            <div className="flex items-center gap-2 border-t border-border/30 bg-muted/10 px-3 py-1.5">
+              <div className="h-3 w-12 rounded motion-safe:animate-pulse bg-muted" />
+              <div className="ml-auto h-3 w-20 rounded motion-safe:animate-pulse bg-muted" />
+            </div>
+          </div>
+        ))}
       </div>
     );
   }
@@ -102,9 +124,9 @@ export function MachinePicker({
         <p className="text-sm">
           Run{" "}
           <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
-            mando
+            mando connect
           </code>{" "}
-          on a machine and approve the pairing request to get started.
+          on a machine, then approve the pairing request to get started.
         </p>
       </div>
     );
@@ -135,22 +157,34 @@ export function MachinePicker({
               className="group flex w-full min-w-0 flex-col text-left outline-none transition-colors hover:bg-muted/5 focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <div className="flex min-w-0 items-center justify-between gap-2 px-3 py-2.5">
-                <span className="min-w-0 flex-1 truncate text-base font-medium tracking-tight text-fg">
-                  {machine.name}
+                <span className="flex min-w-0 flex-1 items-center gap-2">
+                  <StatusDot online={machine.online} />
+                  <span className="min-w-0 truncate font-mono text-base font-medium tracking-tight text-fg">
+                    {machine.name}
+                  </span>
                 </span>
                 <Badge
                   intent={machine.online ? "success" : "secondary"}
                   isCircle={false}
+                  className="font-mono uppercase"
                 >
                   {label}
                 </Badge>
               </div>
               <div className="flex items-center gap-2 border-t border-border/30 bg-muted/10 px-3 py-1.5 text-xs text-muted-fg">
-                {machine.platform && <span>{machine.platform}</span>}
-                <span className="ml-auto tabular-nums">
-                  {machine.online
-                    ? "Ready"
-                    : `Last seen ${machine.lastSeenAt ?? "never"}`}
+                {machine.platform && (
+                  <span className="font-mono">{machine.platform}</span>
+                )}
+                <span className="ml-auto font-mono tabular-nums">
+                  {machine.online ? (
+                    "Ready"
+                  ) : machine.lastSeenAt ? (
+                    <span title={formatAbsoluteTime(machine.lastSeenAt) ?? undefined}>
+                      Last seen {formatRelativeTime(machine.lastSeenAt) ?? "unknown"}
+                    </span>
+                  ) : (
+                    "Last seen never"
+                  )}
                 </span>
               </div>
             </button>

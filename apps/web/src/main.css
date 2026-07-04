@@ -99,10 +99,13 @@
 
   --bg: oklch(1 0 0);
   --fg: oklch(0.21 0.006 285.885);
-  --primary: oklch(0.141 0.005 285.823);
+  /* Single brand/interactive accent: indigo-600 (#4F46E5). Used for primary
+     buttons, links, focus rings, and selected/active states -- kept
+     separate from the semantic success/warning/danger tokens below. */
+  --primary: oklch(0.511 0.23 276.966);
   --primary-fg: oklch(0.985 0 0);
-  --primary-subtle: oklch(0.442 0.017 285.786 / 0.1);
-  --primary-subtle-fg: oklch(0.21 0.006 285.885);
+  --primary-subtle: oklch(0.511 0.23 276.966 / 0.1);
+  --primary-subtle-fg: oklch(0.457 0.215 277.023);
   --secondary: oklch(0.92 0.004 286.32);
   --secondary-fg: oklch(0.141 0.005 285.823);
   --overlay: oklch(1 0 0);
@@ -131,17 +134,17 @@
   --danger-subtle-fg: oklch(0.505 0.213 27.518);
   --border: oklch(0.911 0.006 286.286);
   --input: oklch(0.871 0.006 286.286);
-  --ring: oklch(0.141 0.005 285.823);
+  --ring: oklch(0.511 0.23 276.966);
   --navbar: oklch(0.995 0 0);
   --navbar-fg: oklch(0.141 0.005 285.823);
   --sidebar: oklch(0.985 0 0);
   --sidebar-fg: oklch(0.141 0.005 285.823);
-  --sidebar-primary: oklch(0.442 0.017 285.786 / 0.1);
-  --sidebar-primary-fg: oklch(0.37 0.013 285.805);
+  --sidebar-primary: oklch(0.511 0.23 276.966 / 0.12);
+  --sidebar-primary-fg: oklch(0.457 0.215 277.023);
   --sidebar-accent: oklch(0.92 0.004 286.32);
   --sidebar-accent-fg: oklch(0.141 0.005 285.823);
   --sidebar-border: oklch(0.901 0.006 286.286);
-  --sidebar-ring: oklch(0.141 0.005 285.823);
+  --sidebar-ring: oklch(0.511 0.23 276.966);
   --chart-1: oklch(0.274 0.006 286.033);
   --chart-2: oklch(0.37 0.013 285.805);
   --chart-3: oklch(0.442 0.017 285.786);
@@ -161,10 +164,13 @@
 .dark {
   --bg: oklch(0.141 0.005 285.823);
   --fg: oklch(0.985 0 0);
-  --primary: oklch(0.985 0 0);
+  /* Same brand accent, lightened for dark backgrounds: indigo-400
+     (#818CF8). Text/icons drawn on top use the app's own near-black tone
+     for contrast (~6.6:1) rather than pure white or pure black. */
+  --primary: oklch(0.68 0.158 276.935);
   --primary-fg: oklch(0.141 0.005 285.823);
-  --primary-subtle: oklch(0.442 0.017 285.786 / 0.1);
-  --primary-subtle-fg: oklch(0.985 0 0);
+  --primary-subtle: oklch(0.68 0.158 276.935 / 0.14);
+  --primary-subtle-fg: oklch(0.785 0.104 274.713);
   --secondary: oklch(0.244 0.006 286.033);
   --secondary-fg: oklch(0.985 0 0);
   --overlay: oklch(0.21 0.006 285.885);
@@ -193,17 +199,17 @@
   --danger-subtle-fg: oklch(0.704 0.191 22.216);
   --border: oklch(0.27 0.013 285.805);
   --input: oklch(0.31 0.013 285.805);
-  --ring: oklch(0.985 0 0);
+  --ring: oklch(0.68 0.158 276.935);
   --navbar: oklch(0.19 0.006 285.885);
   --navbar-fg: oklch(0.985 0 0);
   --sidebar: oklch(0.18 0.006 285.885);
   --sidebar-fg: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.442 0.017 285.786 / 0.1);
-  --sidebar-primary-fg: oklch(0.705 0.015 286.067);
+  --sidebar-primary: oklch(0.68 0.158 276.935 / 0.16);
+  --sidebar-primary-fg: oklch(0.785 0.104 274.713);
   --sidebar-accent: oklch(0.274 0.006 286.033);
   --sidebar-accent-fg: oklch(0.985 0 0);
   --sidebar-border: oklch(0.274 0.006 286.033);
-  --sidebar-ring: oklch(0.985 0 0);
+  --sidebar-ring: oklch(0.68 0.158 276.935);
   --chart-1: oklch(0.985 0 0);
   --chart-2: oklch(0.92 0.004 286.32);
   --chart-3: oklch(0.871 0.006 286.286);
@@ -213,6 +219,57 @@
 
 .font-mono {
   font-family: var(--font-mono);
+}
+
+/* Signature "connection indicator" dot for machine status tiles -- a
+   calm pulse when online, a static ring when offline. The dot itself is
+   purely decorative (aria-hidden; see status-dot.tsx): the adjacent status
+   badge text is the accessible label. Motion is gated behind
+   prefers-reduced-motion so the pulse never runs for users who've asked
+   for reduced motion -- the ::after ring stays put at rest instead. */
+.status-dot {
+  position: relative;
+  display: inline-flex;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: var(--radius-4xl);
+  flex-shrink: 0;
+}
+
+.status-dot[data-state="online"] {
+  background-color: var(--color-success);
+}
+
+.status-dot[data-state="online"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-4xl);
+  background-color: var(--color-success);
+  opacity: 0.55;
+}
+
+.status-dot[data-state="offline"] {
+  background-color: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--color-muted-fg);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .status-dot[data-state="online"]::after {
+    animation: status-dot-pulse 2.4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+}
+
+@keyframes status-dot-pulse {
+  0% {
+    transform: scale(1);
+    opacity: 0.55;
+  }
+  70%,
+  100% {
+    transform: scale(2.4);
+    opacity: 0;
+  }
 }
 
 body {

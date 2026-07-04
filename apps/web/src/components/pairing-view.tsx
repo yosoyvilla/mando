@@ -55,7 +55,8 @@ export function PairingView({
         <div className="space-y-1 text-center">
           <h1 className="text-2xl font-semibold text-fg">Pair a machine</h1>
           <p className="text-sm text-muted-fg">
-            Enter the pairing code shown by <code>mando</code> to link that
+            Enter the pairing code shown by{" "}
+            <code className="font-mono text-xs">mando</code> to link that
             machine to your account.
           </p>
         </div>

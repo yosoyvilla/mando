@@ -270,7 +270,7 @@ function QuestionDisplay({
             <div className="flex items-center gap-2 text-[11px] uppercase tracking-wide text-muted-fg">
               {q.header && <span>{q.header}</span>}
               {q.multiple && (
-                <span className="rounded border border-warning/50 bg-warning/10 px-1.5 py-0.5 text-[10px] font-medium text-warning">
+                <span className="rounded border border-warning/50 bg-warning/10 px-1.5 py-0.5 text-[10px] font-medium text-warning-subtle-fg">
                   Multi-select
                 </span>
               )}
@@ -451,7 +451,7 @@ function QuestionAnswerForm({
               <div className="flex items-center gap-2 text-[11px] uppercase tracking-wide text-muted-fg">
                 {q.header && <span>{q.header}</span>}
                 {q.multiple && (
-                  <span className="rounded border border-warning/50 bg-warning/10 px-1.5 py-0.5 text-[10px] font-medium text-warning">
+                  <span className="rounded border border-warning/50 bg-warning/10 px-1.5 py-0.5 text-[10px] font-medium text-warning-subtle-fg">
                     Multi-select
                   </span>
                 )}
@@ -1130,9 +1130,12 @@ function SessionPage() {
       {machineOffline && (
         <div
           role="status"
-          className="border-b border-warning/30 bg-warning/10 px-4 py-2 text-center text-sm text-warning"
+          className="border-b border-warning/30 bg-warning/10 px-4 py-2 text-center text-sm text-warning-subtle-fg"
         >
-          {selectedMachine?.name ?? "This machine"} is offline. Run{" "}
+          <span className="font-mono">
+            {selectedMachine?.name ?? "This machine"}
+          </span>{" "}
+          is offline. Run{" "}
           <code className="rounded bg-warning/20 px-1 py-0.5 font-mono text-xs">
             mando
           </code>{" "}
@@ -1145,8 +1148,22 @@ function SessionPage() {
         ref={chatContainerRef}
       >
         {loading && (
-          <div className="flex items-center justify-center py-8">
-            <Loader className="size-6" />
+          <div
+            role="status"
+            aria-label="Loading messages"
+            className="space-y-4 p-6"
+          >
+            <span className="sr-only">Loading messages…</span>
+            {[0, 1, 2].map((i) => (
+              <div
+                key={i}
+                aria-hidden="true"
+                className={`space-y-2 ${i % 2 === 1 ? "ml-auto max-w-[70%]" : "max-w-[70%]"}`}
+              >
+                <div className="h-3 w-16 rounded motion-safe:animate-pulse bg-muted" />
+                <div className="h-14 w-full rounded-lg motion-safe:animate-pulse bg-muted" />
+              </div>
+            ))}
           </div>
         )}
 

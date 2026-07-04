@@ -13,6 +13,7 @@ import {
 import { useEffect, useState, useMemo } from "react";
 import { parsePatchFiles } from "@pierre/diffs";
 import { Avatar } from "@/components/ui/avatar";
+import { StatusDot } from "@/components/status-dot";
 import {
   ComboBox,
   ComboBoxContent,
@@ -130,15 +131,15 @@ function MachineSwitcher() {
               textValue={item.name}
               isDisabled={!item.online}
             >
-              <ServerIcon data-slot="icon" className="size-4" />
-              <ComboBoxLabel className="min-w-0 truncate">
+              <StatusDot online={item.online} className="shrink-0" />
+              <ComboBoxLabel className="min-w-0 truncate font-mono">
                 {item.name}
               </ComboBoxLabel>
               <ComboBoxDescription className="flex min-w-0 items-center gap-2 text-xs">
                 {item.platform && (
-                  <span className="truncate">{item.platform}</span>
+                  <span className="truncate font-mono">{item.platform}</span>
                 )}
-                <span className="shrink-0">
+                <span className="shrink-0 font-mono">
                   {item.online ? "Online" : "Offline"}
                 </span>
               </ComboBoxDescription>
@@ -245,8 +246,8 @@ export default function AppSidebar(
       <SidebarHeader>
         <UILink href="/" className="flex items-center gap-x-2">
           <img src="/logo.svg" alt="OpenCode Mando" className="size-6" />
-          <SidebarLabel className="font-medium">
-            OpenCode <span className="text-muted-fg">Mando</span>
+          <SidebarLabel className="font-mono font-medium tracking-tight">
+            opencode <span className="text-muted-fg">mando</span>
           </SidebarLabel>
         </UILink>
       </SidebarHeader>
@@ -344,7 +345,7 @@ export default function AppSidebar(
               <MenuHeader separator>
                 <span className="block">{identityLabel}</span>
                 {selectedMachine && (
-                  <span className="block text-muted-fg text-xs">
+                  <span className="block font-mono text-muted-fg text-xs">
                     {selectedMachine.name}
                   </span>
                 )}
