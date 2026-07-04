@@ -3,6 +3,7 @@ import type postgres from "postgres";
 import type { Config } from "./config";
 import type { AuthVariables } from "./auth/middleware";
 import { userRoutes } from "./users/routes";
+import { pairingRoutes } from "./pairing/routes";
 
 type Sql = ReturnType<typeof postgres>;
 
@@ -20,6 +21,7 @@ export function buildApp(deps: AppDeps): Hono<{ Variables: AuthVariables }> {
   const app = new Hono<{ Variables: AuthVariables }>();
 
   app.route("/", userRoutes(deps.sql));
+  app.route("/", pairingRoutes(deps.sql));
 
   return app;
 }
