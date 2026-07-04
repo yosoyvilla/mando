@@ -2,6 +2,7 @@ import { getCookie } from "hono/cookie";
 import type { MiddlewareHandler } from "hono";
 import type postgres from "postgres";
 import { readSession } from "./session";
+import { findUserById } from "../users/repo";
 
 type Sql = ReturnType<typeof postgres>;
 
@@ -31,6 +32,20 @@ export function requireUser(sql: Sql): MiddlewareHandler<{ Variables: AuthVariab
     if (!session) return c.json({ error: "unauthorized" }, 401);
 
     c.set("userId", session.userId);
+    await next();
+  };
+}
+
+// Must run after requireUser (needs c.get("userId") already set). Gates
+// admin-only routes -- currently just POST /api/v1/auth/invite, which
+// otherwise lets any authenticated user mint new accounts (see
+// users/routes.ts). A missing/deleted user (session outlived the account)
+// folds into the same 403 as "not an admin" rather than a separate error,
+// since there's nothing actionable a caller can do differently either way.
+export function requireAdmin(sql: Sql): MiddlewareHandler<{ Variables: AuthVariables }> {
+  return async (c, next) => {
+    const user = await findUserById(sql, c.get("userId"));
+    if (!user?.is_admin) return c.json({ error: "forbidden" }, 403);
     await next();
   };
 }

@@ -13,7 +13,7 @@ const url = process.env.TEST_DATABASE_URL ?? "postgres://mando:mando@localhost:5
 const sql = getDb(url);
 const config = loadConfig({
   DATABASE_URL: url,
-  COOKIE_SECRET: "test-secret",
+  COOKIE_SECRET: "test-secret-that-is-at-least-32-characters",
   PUBLIC_URL: "http://localhost:8080",
 });
 
