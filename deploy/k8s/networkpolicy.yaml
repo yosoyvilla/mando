@@ -67,6 +67,12 @@ spec:
           port: 53
     # Everything else (Postgres and any other external dependency): see the
     # rationale above for why this is broad rather than a pinned ipBlock.
+    # The cloud metadata endpoint (169.254.169.254, used by AWS/GCP/Azure to
+    # hand instance credentials to anything that can reach it) is carved out
+    # even from this broad allow -- the hub has no legitimate reason to call
+    # it, and leaving it reachable would let a compromised hub process (or a
+    # bug in a dependency) pull node/instance IAM credentials.
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
+            except: ["169.254.169.254/32"]

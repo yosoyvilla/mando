@@ -167,6 +167,33 @@ describe("forward", () => {
     });
   });
 
+  it("strips content-encoding (and content-range) from the emitted response_begin, since Bun's fetch already decompressed the body", async () => {
+    const gzipped = Bun.gzipSync(Buffer.from("gzipped-body"));
+    const localBase = startStub(() => {
+      return new Response(gzipped, {
+        status: 200,
+        headers: { "content-type": "text/plain", "content-encoding": "gzip" },
+      });
+    });
+
+    const frame = {
+      type: "http_request" as const,
+      id: "req-gzip",
+      payload: { method: "GET", path: "/gzip", headers: {}, body: null },
+    };
+
+    const sent: Frame[] = [];
+    await forward(frame, localBase, (f) => sent.push(f));
+
+    const begin = sent[0] as Extract<Frame, { type: "response_begin" }>;
+    expect(begin.type).toBe("response_begin");
+    expect(begin.payload.headers["content-encoding"]).toBeUndefined();
+    expect(begin.payload.headers["content-type"]).toBe("text/plain");
+    // Bun's fetch decompresses transparently -- the bytes forwarded as
+    // response_chunk frames are the original plaintext, not gzip bytes.
+    expect(decodeChunks(sent)).toBe("gzipped-body");
+  });
+
   it("emits response_error when the local fetch fails (connection refused)", async () => {
     // Start and immediately stop a server to get a port guaranteed to be
     // free/closed, so the fetch below fails with a connection error.

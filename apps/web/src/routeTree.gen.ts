@@ -12,7 +12,6 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as PairRouteImport } from './routes/pair'
 import { Route as MachinesRouteImport } from './routes/machines'
 import { Route as LoginRouteImport } from './routes/login'
-import { Route as AboutRouteImport } from './routes/about'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
 import { Route as AppSettingsRouteImport } from './routes/_app/settings'
@@ -32,11 +31,6 @@ const MachinesRoute = MachinesRouteImport.update({
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
   path: '/login',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AboutRoute = AboutRouteImport.update({
-  id: '/about',
-  path: '/about',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AppRoute = AppRouteImport.update({
@@ -66,7 +60,6 @@ const AppSessionIdRoute = AppSessionIdRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
-  '/about': typeof AboutRoute
   '/login': typeof LoginRoute
   '/machines': typeof MachinesRoute
   '/pair': typeof PairRoute
@@ -75,7 +68,6 @@ export interface FileRoutesByFullPath {
   '/session/$id': typeof AppSessionIdRoute
 }
 export interface FileRoutesByTo {
-  '/about': typeof AboutRoute
   '/login': typeof LoginRoute
   '/machines': typeof MachinesRoute
   '/pair': typeof PairRoute
@@ -87,7 +79,6 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_app': typeof AppRouteWithChildren
-  '/about': typeof AboutRoute
   '/login': typeof LoginRoute
   '/machines': typeof MachinesRoute
   '/pair': typeof PairRoute
@@ -100,7 +91,6 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
-    | '/about'
     | '/login'
     | '/machines'
     | '/pair'
@@ -109,7 +99,6 @@ export interface FileRouteTypes {
     | '/session/$id'
   fileRoutesByTo: FileRoutesByTo
   to:
-    | '/about'
     | '/login'
     | '/machines'
     | '/pair'
@@ -120,7 +109,6 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/_app'
-    | '/about'
     | '/login'
     | '/machines'
     | '/pair'
@@ -132,7 +120,6 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   AppRoute: typeof AppRouteWithChildren
-  AboutRoute: typeof AboutRoute
   LoginRoute: typeof LoginRoute
   MachinesRoute: typeof MachinesRoute
   PairRoute: typeof PairRoute
@@ -159,13 +146,6 @@ declare module '@tanstack/react-router' {
       path: '/login'
       fullPath: '/login'
       preLoaderRoute: typeof LoginRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/about': {
-      id: '/about'
-      path: '/about'
-      fullPath: '/about'
-      preLoaderRoute: typeof AboutRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_app': {
@@ -224,7 +204,6 @@ const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
 
 const rootRouteChildren: RootRouteChildren = {
   AppRoute: AppRouteWithChildren,
-  AboutRoute: AboutRoute,
   LoginRoute: LoginRoute,
   MachinesRoute: MachinesRoute,
   PairRoute: PairRoute,

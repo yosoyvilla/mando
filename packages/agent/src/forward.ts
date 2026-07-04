@@ -33,7 +33,21 @@ export interface ForwardOptions {
 // out or make opencode mis-parse the body. Mirrors the equivalent
 // stripping done hub-side (apps/hub/src/proxy/routes.ts, tunnel/proxy.ts).
 const EXCLUDED_REQUEST_HEADERS = new Set(["host", "connection", "content-length"]);
-const EXCLUDED_RESPONSE_HEADERS = new Set(["content-length", "transfer-encoding", "connection"]);
+// `content-encoding` is excluded because Bun's `fetch` transparently
+// decompresses the response body before handing it to us -- the bytes we
+// read via `response.body.getReader()` below are already plaintext, so
+// forwarding the original `content-encoding: gzip`/`br`/etc. header would
+// make the browser try to re-inflate bytes that were never compressed on
+// this leg, corrupting the body. `content-range` is excluded for the same
+// class of reason: it describes byte offsets into the *original* encoded
+// body, which no longer apply once the body has been decoded/re-streamed.
+const EXCLUDED_RESPONSE_HEADERS = new Set([
+  "content-length",
+  "transfer-encoding",
+  "connection",
+  "content-encoding",
+  "content-range",
+]);
 
 function filterHeaders(raw: Record<string, string>, excluded: Set<string>): Record<string, string> {
   const headers: Record<string, string> = {};

@@ -64,8 +64,32 @@ export function tunnelWsHandler(deps: TunnelWsDeps) {
       pingTimer = null;
     }
 
+    // Errors every in-flight response handler registered by proxyRequest
+    // (apps/hub/src/tunnel/proxy.ts) for this connection, then drops them.
+    // Without this, a WS teardown (close/error/ping-timeout) while a
+    // request is mid-flight leaves proxyRequest's ReadableStream controller
+    // open forever -- a browser reading an SSE response would hang until
+    // its own transport eventually times out (or never). Delivering a
+    // synthetic response_error mirrors exactly what a real agent-sent
+    // response_error does: resolves proxyRequest's promise as a 502 if
+    // response_begin never arrived, or errors the open stream if it did --
+    // either way the browser's fetch/reader settles instead of hanging.
+    function failInFlightResponses(): void {
+      if (responseHandlers.size === 0) return;
+      const entries = [...responseHandlers.entries()];
+      responseHandlers.clear();
+      for (const [id, handler] of entries) {
+        handler({
+          type: "response_error",
+          id,
+          payload: { code: "agent_disconnected", message: "the agent's tunnel connection closed" },
+        });
+      }
+    }
+
     function unregister(): void {
       stopTimers();
+      failInFlightResponses();
       if (machineId) {
         deps.registry.remove(machineId);
         machineId = null;

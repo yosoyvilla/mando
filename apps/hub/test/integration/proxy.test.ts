@@ -346,6 +346,52 @@ test(
 );
 
 test(
+  "the agent's tunnel dropping mid-stream ends the browser's response instead of hanging forever",
+  async () => {
+    const registry = new Registry();
+    const server = await startTestServer({ sql, config, registry });
+    const { cookie, machineId, agentWs } = await setUpOnlineMachine(server, "agent-drop");
+
+    // No response_end -- this stream is left open exactly like a live SSE
+    // connection would be, so the only thing that can ever end it is the
+    // agent's tunnel going away.
+    respondTo(agentWs, "/sse", { status: 200, chunks: ["a"], end: false });
+
+    const res = await fetch(`${server.url}/api/v1/machines/${machineId}/opencode/sse`, {
+      headers: { Cookie: cookie },
+    });
+    expect(res.status).toBe(200);
+
+    const reader = res.body!.getReader();
+    const first = await reader.read();
+    expect(first.done).toBe(false);
+    expect(Buffer.from(first.value!).toString("utf8")).toBe("a");
+
+    // Simulate the agent's machine losing its tunnel (network drop, agent
+    // crash, etc.) mid-stream -- the hub's WS onClose handler must error
+    // every in-flight response handler for this connection so the browser
+    // stream settles instead of hanging until some outer timeout.
+    agentWs.close();
+
+    // The assertion that matters here is simply that this settles at all
+    // (resolves or rejects) well within FRAME_WAIT_MS -- before the fix,
+    // nothing ever errored the controller and this read hung forever.
+    const settled = await Promise.race([
+      reader
+        .read()
+        .then(() => "resolved" as const)
+        .catch(() => "rejected" as const),
+      new Promise<"timed_out">((resolve) => setTimeout(() => resolve("timed_out"), FRAME_WAIT_MS)),
+    ]);
+
+    expect(settled).not.toBe("timed_out");
+
+    server.stop();
+  },
+  FRAME_WAIT_MS * 2,
+);
+
+test(
   "cancelling the browser's read sends a cancel frame to the agent for that request id",
   async () => {
     const registry = new Registry();

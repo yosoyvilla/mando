@@ -40,7 +40,13 @@ export const HttpRequestFrame = z.object({
 export const ResponseBeginFrame = z.object({
   type: z.literal("response_begin"),
   id: z.string(),
-  payload: z.object({ status: z.number().int(), headers }),
+  // Bounded to the range `new Response(..., { status })` actually accepts
+  // (200-599 per the Fetch/WHATWG spec) -- outside that, the hub's
+  // `new Response(stream, { status })` (apps/hub/src/tunnel/proxy.ts)
+  // throws a RangeError that escapes the message-handling code and hangs
+  // the request. Rejecting it here folds an out-of-range status into the
+  // existing malformed-frame ignore path instead.
+  payload: z.object({ status: z.number().int().min(200).max(599), headers }),
 });
 
 export const ResponseChunkFrame = z.object({
