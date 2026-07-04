@@ -15,7 +15,8 @@
     },
     "test": {
       "dependsOn": ["^build"],
-      "outputs": []
+      "outputs": [],
+      "passThroughEnv": ["TEST_DATABASE_URL", "MANDO_RATE_LIMIT_LOGIN_MAX", "MANDO_RATE_LIMIT_PAIRING_MAX", "MANDO_RATE_LIMIT_WS_MAX"]
     },
     "typecheck": {
       "dependsOn": ["^build"],
