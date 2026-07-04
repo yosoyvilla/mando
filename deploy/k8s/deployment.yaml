@@ -1,0 +1,118 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mando-hub
+  labels:
+    app.kubernetes.io/name: mando-hub
+    app.kubernetes.io/component: hub
+    app.kubernetes.io/version: "0.1.0"
+spec:
+  # Pinned to exactly 1 replica: the tunnel registry that tracks connected
+  # agents/WebSocket clients (/ws/agent) is in-memory per the current design
+  # (packages/hub tunnel registry, no shared pub/sub yet). Scaling beyond 1
+  # replica would split connections across pods with no way for one pod to
+  # know about tunnels registered on another, silently breaking routing.
+  # Raise this only after a shared registry (e.g. Redis/Postgres LISTEN-NOTIFY
+  # pub/sub) backs the tunnel registry.
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mando-hub
+      app.kubernetes.io/component: hub
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mando-hub
+        app.kubernetes.io/component: hub
+        app.kubernetes.io/version: "0.1.0"
+    spec:
+      serviceAccountName: mando-hub
+      containers:
+        - name: hub
+          # Placeholder image -- in real deployments this is set by CI/CD to
+          # a registry-qualified, digest-or-tag-pinned image
+          # (e.g. ghcr.io/<org>/mando-hub:<git-sha>), not "latest".
+          image: mando-hub:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "8080"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: mando-hub-secrets
+                  key: DATABASE_URL
+            - name: COOKIE_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: mando-hub-secrets
+                  key: COOKIE_SECRET
+            - name: PUBLIC_URL
+              valueFrom:
+                secretKeyRef:
+                  name: mando-hub-secrets
+                  key: PUBLIC_URL
+            # Optional bootstrap-admin vars. Uncomment only if the Secret
+            # also defines these keys (see secret.example.yaml) and you want
+            # an admin account auto-provisioned on first start.
+            # - name: MANDO_ADMIN_EMAIL
+            #   valueFrom:
+            #     secretKeyRef:
+            #       name: mando-hub-secrets
+            #       key: MANDO_ADMIN_EMAIL
+            # - name: MANDO_ADMIN_PASSWORD
+            #   valueFrom:
+            #     secretKeyRef:
+            #       name: mando-hub-secrets
+            #       key: MANDO_ADMIN_PASSWORD
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          securityContext:
+            runAsNonRoot: true
+            # oven/bun images ship a non-root "bun" user at uid 1000 (see
+            # deploy/Dockerfile comment) -- matches the image's actual user.
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+          # readOnlyRootFilesystem is true above. The hub app itself does not
+          # write to disk at runtime (Postgres is external via DATABASE_URL;
+          # a grep of apps/hub/src found zero tmpdir/mkdtemp/writeFile/"/tmp"
+          # usage). We still mount an emptyDir at /tmp defensively because
+          # Bun's runtime (and some transitive deps) can want scratch space
+          # (e.g. for temp files during startup) even when app code doesn't
+          # ask for it explicitly, and a read-only "/tmp" is a common source
+          # of confusing crashes that are hard to attribute back to this
+          # setting. The mount is cheap (memory-backed by default) and safe.
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
