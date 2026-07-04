@@ -40,8 +40,17 @@ export function requireMachineOwnership(sql: Sql): MiddlewareHandler<{ Variables
     const id = c.req.param("id");
     if (!id) return c.json({ error: "not found" }, 404);
 
-    const rows = await sql`select * from machines where id = ${id}`;
-    const machine = rows[0] as Machine | undefined;
+    let machine: Machine | undefined;
+    try {
+      const rows = await sql`select * from machines where id = ${id}`;
+      machine = rows[0] as Machine | undefined;
+    } catch {
+      // Any DB error here (including a Postgres uuid-cast failure on a
+      // malformed :id) must fold into the same 404 as a nonexistent
+      // machine -- otherwise a malformed id would leak a 500 and let an
+      // attacker distinguish "not valid" from "not yours"/"doesn't exist".
+      return c.json({ error: "not found" }, 404);
+    }
     const userId = c.get("userId");
 
     if (!machine || machine.user_id !== userId) {

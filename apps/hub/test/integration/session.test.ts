@@ -37,6 +37,15 @@ test("readSession returns null for an unknown session id", async () => {
   expect(session).toBeNull();
 });
 
+test("readSession returns null for an expired session", async () => {
+  const user = await createUser(sql, uniqueEmail("expired"), "hunter2horse");
+  const sessionId = await createSession(sql, user.id);
+  await sql`update user_sessions set expires_at = now() - interval '1 day' where id = ${sessionId}`;
+
+  const session = await readSession(sql, sessionId);
+  expect(session).toBeNull();
+});
+
 test("requireUser returns 401 when no cookie is present", async () => {
   const app = new Hono<{ Variables: { userId: string } }>();
   app.get("/me", requireUser(sql), (c) => c.json({ userId: c.get("userId") }));
@@ -93,6 +102,19 @@ test("requireMachineOwnership returns 404 when the machine does not exist", asyn
   app.get("/machines/:id", requireUser(sql), requireMachineOwnership(sql), (c) => c.json({ ok: true }));
 
   const res = await app.request("/machines/00000000-0000-0000-0000-000000000000", {
+    headers: { Cookie: `mando_sess=${sessionId}` },
+  });
+  expect(res.status).toBe(404);
+});
+
+test("requireMachineOwnership returns 404 (not 500) for a malformed :id", async () => {
+  const user = await createUser(sql, uniqueEmail("malformed"), "hunter2horse");
+  const sessionId = await createSession(sql, user.id);
+
+  const app = new Hono<{ Variables: { userId: string; machine: unknown } }>();
+  app.get("/machines/:id", requireUser(sql), requireMachineOwnership(sql), (c) => c.json({ ok: true }));
+
+  const res = await app.request("/machines/not-a-uuid", {
     headers: { Cookie: `mando_sess=${sessionId}` },
   });
   expect(res.status).toBe(404);
