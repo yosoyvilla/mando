@@ -5,6 +5,7 @@ import type { AuthVariables } from "./auth/middleware";
 import { userRoutes } from "./users/routes";
 import { pairingRoutes } from "./pairing/routes";
 import { machineRoutes } from "./machines/routes";
+import { proxyRoutes } from "./proxy/routes";
 import { Registry } from "./tunnel/registry";
 import { tunnelWsHandler, websocket } from "./tunnel/ws";
 
@@ -44,6 +45,7 @@ export function buildApp(deps: AppDeps): Hono<{ Variables: AuthVariables }> {
   app.route("/", userRoutes(deps.sql));
   app.route("/", pairingRoutes(deps.sql));
   app.route("/", machineRoutes(deps.sql, registry));
+  app.route("/", proxyRoutes(deps.sql, registry));
 
   app.get(
     "/ws/agent",

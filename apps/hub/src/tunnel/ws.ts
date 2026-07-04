@@ -107,6 +107,9 @@ export function tunnelWsHandler(deps: TunnelWsDeps) {
         onResponse(id, handler) {
           responseHandlers.set(id, handler);
         },
+        offResponse(id) {
+          responseHandlers.delete(id);
+        },
         close() {
           ws.close();
         },
