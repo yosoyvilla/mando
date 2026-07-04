@@ -93,6 +93,14 @@
         "typescript": "^6.0.3",
       },
     },
+    "packages/opencode-plugin": {
+      "name": "@mando/opencode-plugin",
+      "version": "0.1.0",
+      "devDependencies": {
+        "@types/bun": "^1.3.13",
+        "typescript": "^6.0.3",
+      },
+    },
     "packages/protocol": {
       "name": "@mando/protocol",
       "version": "0.1.0",
@@ -199,6 +207,8 @@
     "@mando/agent": ["@mando/agent@workspace:packages/agent"],
 
     "@mando/hub": ["@mando/hub@workspace:apps/hub"],
+
+    "@mando/opencode-plugin": ["@mando/opencode-plugin@workspace:packages/opencode-plugin"],
 
     "@mando/protocol": ["@mando/protocol@workspace:packages/protocol"],
 
