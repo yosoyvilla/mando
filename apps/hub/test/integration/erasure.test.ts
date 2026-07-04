@@ -6,7 +6,7 @@ import { buildApp } from "../../src/app";
 import { createUser } from "../../src/users/repo";
 import { createSession } from "../../src/auth/session";
 import { Registry } from "../../src/tunnel/registry";
-import { serializeFrame, parseFrame, type Frame } from "@mando/protocol";
+import { serializeFrame, parseFrame, PROTOCOL_VERSION, type Frame } from "@mando/protocol";
 import { startTestServer, type TestServer } from "../helpers/server";
 
 const url = process.env.TEST_DATABASE_URL ?? "postgres://mando:mando@localhost:5433/mando";
@@ -132,7 +132,13 @@ function helloFrame(id: string, token: string): string {
   return serializeFrame({
     type: "hello",
     id,
-    payload: { token, machineName: "erase-test-machine", opencodePort: 4096, agentVersion: "0.0.1-test" },
+    payload: {
+      token,
+      machineName: "erase-test-machine",
+      opencodePort: 4096,
+      agentVersion: "0.0.1-test",
+      protocolVersion: PROTOCOL_VERSION,
+    },
   });
 }
 

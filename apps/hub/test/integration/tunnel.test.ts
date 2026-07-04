@@ -5,7 +5,7 @@ import { loadConfig } from "../../src/config";
 import { createUser } from "../../src/users/repo";
 import { createMachine, insertMachineToken } from "../../src/machines/repo";
 import { hashSecret } from "../../src/auth/password";
-import { serializeFrame, parseFrame, type Frame } from "@mando/protocol";
+import { serializeFrame, parseFrame, PROTOCOL_VERSION, type Frame } from "@mando/protocol";
 import { Registry } from "../../src/tunnel/registry";
 import { startTestServer } from "../helpers/server";
 
@@ -41,11 +41,26 @@ async function seedMachine(tag: string) {
   return { machine, token };
 }
 
-function helloFrame(id: string, token: string): string {
+// Defaults to the hub's own PROTOCOL_VERSION so every existing test below
+// (written before version negotiation existed) keeps sending a
+// compatible hello without having to know about it. Tests exercising
+// version_mismatch pass `protocolVersion` explicitly, or `null` to
+// simulate a pre-versioning agent build that omits the field entirely --
+// NOT `undefined`, since a default parameter substitutes its default for
+// an explicitly-passed `undefined` too, which would silently defeat the
+// "omit the field" case.
+function helloFrame(id: string, token: string, protocolVersion?: number | null): string {
+  const version = protocolVersion === null ? undefined : protocolVersion ?? PROTOCOL_VERSION;
   return serializeFrame({
     type: "hello",
     id,
-    payload: { token, machineName: "test-machine", opencodePort: 4096, agentVersion: "0.0.1-test" },
+    payload: {
+      token,
+      machineName: "test-machine",
+      opencodePort: 4096,
+      agentVersion: "0.0.1-test",
+      ...(version === undefined ? {} : { protocolVersion: version }),
+    },
   });
 }
 
@@ -146,6 +161,80 @@ test(
     }
 
     await waitForClose(ws);
+    server.stop();
+  },
+  FRAME_WAIT_MS * 2,
+);
+
+test(
+  "hello with a matching protocolVersion registers OK",
+  async () => {
+    const registry = new Registry();
+    const server = await startTestServer({ sql, config, registry });
+    const { machine, token } = await seedMachine("version-match");
+
+    const ws = new WebSocket(server.wsUrl);
+    await waitForOpen(ws);
+    ws.send(helloFrame("hello-vmatch", token, PROTOCOL_VERSION));
+
+    const registered = await waitForFrame(ws, (f) => f.type === "registered");
+    expect(registered.type).toBe("registered");
+    if (registered.type === "registered") {
+      expect(registered.payload.machineId).toBe(machine.id);
+    }
+    expect(registry.get(machine.id)).not.toBeNull();
+
+    ws.close();
+    server.stop();
+  },
+  FRAME_WAIT_MS * 2,
+);
+
+test(
+  "hello with a mismatched major protocolVersion gets version_mismatch, closes, and is not registered",
+  async () => {
+    const registry = new Registry();
+    const server = await startTestServer({ sql, config, registry });
+    const { machine, token } = await seedMachine("version-mismatch");
+
+    const ws = new WebSocket(server.wsUrl);
+    await waitForOpen(ws);
+    ws.send(helloFrame("hello-vmismatch", token, PROTOCOL_VERSION + 1));
+
+    const errorFrame = await waitForFrame(ws, (f) => f.type === "error");
+    expect(errorFrame.type).toBe("error");
+    if (errorFrame.type === "error") {
+      expect(errorFrame.payload.code).toBe("version_mismatch");
+    }
+
+    await waitForClose(ws);
+    expect(registry.get(machine.id)).toBeNull();
+
+    server.stop();
+  },
+  FRAME_WAIT_MS * 2,
+);
+
+test(
+  "hello with no protocolVersion (pre-versioning agent) gets version_mismatch, not a silent timeout",
+  async () => {
+    const registry = new Registry();
+    const server = await startTestServer({ sql, config, registry });
+    const { machine, token } = await seedMachine("version-missing");
+
+    const ws = new WebSocket(server.wsUrl);
+    await waitForOpen(ws);
+    ws.send(helloFrame("hello-vmissing", token, null));
+
+    const errorFrame = await waitForFrame(ws, (f) => f.type === "error");
+    expect(errorFrame.type).toBe("error");
+    if (errorFrame.type === "error") {
+      expect(errorFrame.payload.code).toBe("version_mismatch");
+    }
+
+    await waitForClose(ws);
+    expect(registry.get(machine.id)).toBeNull();
+
     server.stop();
   },
   FRAME_WAIT_MS * 2,

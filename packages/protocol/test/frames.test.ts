@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { parseFrame, serializeFrame } from "../src/index";
+import { parseFrame, serializeFrame, PROTOCOL_VERSION } from "../src/index";
 
 test("http_request roundtrips", () => {
   const f = {
@@ -41,4 +41,36 @@ test("hello carries token, machine name, port, version", () => {
     payload: { token: "t", machineName: "laptop", opencodePort: 4096, agentVersion: "0.1.0" },
   } as const;
   expect(parseFrame(serializeFrame(f))).toEqual(f);
+});
+
+test("hello parses without protocolVersion (old agent build)", () => {
+  const raw = JSON.stringify({
+    type: "hello",
+    id: "h-old",
+    payload: { token: "t", machineName: "laptop", opencodePort: 4096, agentVersion: "0.0.9" },
+  });
+  const frame = parseFrame(raw);
+  expect(frame.type).toBe("hello");
+  if (frame.type === "hello") {
+    expect(frame.payload.protocolVersion).toBeUndefined();
+  }
+});
+
+test("hello parses with protocolVersion set", () => {
+  const f = {
+    type: "hello",
+    id: "h-new",
+    payload: {
+      token: "t",
+      machineName: "laptop",
+      opencodePort: 4096,
+      agentVersion: "0.1.0",
+      protocolVersion: PROTOCOL_VERSION,
+    },
+  } as const;
+  expect(parseFrame(serializeFrame(f))).toEqual(f);
+});
+
+test("PROTOCOL_VERSION is exported as an integer", () => {
+  expect(Number.isInteger(PROTOCOL_VERSION)).toBe(true);
 });

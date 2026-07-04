@@ -2,7 +2,22 @@ import { hostname } from "node:os";
 import { join } from "node:path";
 import { readConfig, writeConfig, type AgentConfig } from "./config";
 import { detectOpencodePort as defaultDetectOpencodePort } from "./opencode";
-import { defaultPidFilePath, isProcessAlive as defaultIsProcessAlive, readPidFile, writePidFile } from "./daemon";
+import {
+  clearLastError,
+  defaultErrorFilePath,
+  defaultPidFilePath,
+  isProcessAlive as defaultIsProcessAlive,
+  readLastError,
+  readPidFile,
+  writePidFile,
+} from "./daemon";
+
+// How long to give the freshly-spawned daemon a chance to hit an
+// immediate, fatal hub rejection (version_mismatch, unauthorized,
+// hello_timeout) before connect() reports "connected" -- see the
+// post-spawn check below for why this is safe/bounded rather than a
+// vague "wait and hope" delay.
+const DEFAULT_POST_SPAWN_GRACE_MS = 250;
 
 export interface ConnectOpts {
   json?: boolean;
@@ -33,6 +48,12 @@ export interface ConnectOpts {
   // already-running-daemon guard below, so tests can simulate a live or
   // dead pid without depending on real OS process ids.
   isProcessAlive?: (pid: number) => boolean;
+  // Test-only injection points for the post-spawn fatal-error check (see
+  // connect()'s doc comment below). Not part of connect()'s documented
+  // behavior beyond letting tests skip the real delay.
+  errorFile?: string;
+  postSpawnGraceMs?: number;
+  sleepFn?: (ms: number) => Promise<void>;
 }
 
 export type ConnectResult =
@@ -178,6 +199,9 @@ export async function connect(opts: ConnectOpts = {}): Promise<ConnectResult> {
   const spawnDaemon = opts.spawnDaemon ?? defaultSpawnDaemon;
   const isProcessAlive = opts.isProcessAlive ?? defaultIsProcessAlive;
   const pollIntervalMs = opts.pairingPollIntervalMs ?? DEFAULT_PAIRING_POLL_INTERVAL_MS;
+  const errorFile = opts.errorFile ?? defaultErrorFilePath();
+  const postSpawnGraceMs = opts.postSpawnGraceMs ?? DEFAULT_POST_SPAWN_GRACE_MS;
+  const sleepFn = opts.sleepFn ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
 
   const existing = readConfig();
   const hubUrl = resolveHubUrl(opts, existing);
@@ -240,7 +264,29 @@ export async function connect(opts: ConnectOpts = {}): Promise<ConnectResult> {
     return { status: "error", message };
   }
 
+  // Cleared here (synchronously, before the child even exists) rather than
+  // relying solely on the daemon's own startup clear (runDaemon does this
+  // too) -- belt-and-suspenders against a stale error file from a previous
+  // run being misread as this run's failure by the check below.
+  clearLastError(errorFile);
   spawnDaemon(opencodePort);
+
+  // A fatal hub rejection (version_mismatch, unauthorized, hello_timeout)
+  // happens immediately after the daemon's WS handshake -- well inside
+  // this grace window -- so give it a brief chance to write errorFile (see
+  // daemon.ts's runDaemon) before reporting "connected". The daemon runs
+  // fully detached with stdio discarded, so this file is the only channel
+  // available for a foreground `mando connect` to observe a same-tick-fast
+  // failure; a real successful registration takes at least this long
+  // anyway (network round trip + DB token lookup), so this adds no
+  // perceptible delay to the common case.
+  await sleepFn(postSpawnGraceMs);
+  const fatal = readLastError(errorFile);
+  if (fatal) {
+    const message = `daemon failed to connect: ${fatal.message}`;
+    printResult(opts.json, { status: "error", message }, `Error: ${message}`);
+    return { status: "error", message };
+  }
 
   printResult(
     opts.json,

@@ -159,6 +159,7 @@ async function bringMachineOnline(stubPort: number, tmpDir: string): Promise<{ p
   const configPath = join(tmpDir, "mando-config.json");
   const pidFile = join(tmpDir, "mando.pid");
   const stateFile = join(tmpDir, "mando-state.json");
+  const errorFile = join(tmpDir, "mando-error.json");
   writeFileSync(
     configPath,
     JSON.stringify({ hubUrl: HUB_BASE_URL, token: seeded.token, machineName: MACHINE_NAME }, null, 2),
@@ -174,6 +175,11 @@ async function bringMachineOnline(stubPort: number, tmpDir: string): Promise<{ p
       MANDO_CONFIG: configPath,
       MANDO_PID_FILE: pidFile,
       MANDO_STATE_FILE: stateFile,
+      // Isolates connect()'s post-spawn fatal-error check (see
+      // packages/agent/src/connect.ts) from a real ~/.mando-error.json on
+      // whatever host runs this harness, same reasoning as the three vars
+      // above.
+      MANDO_ERROR_FILE: errorFile,
     },
   );
 

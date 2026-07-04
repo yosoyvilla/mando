@@ -83,6 +83,7 @@ export async function bringMachineOnline(
     const configPath = join(tmpDir, "mando-config.json");
     const pidFile = join(tmpDir, "mando.pid");
     const stateFile = join(tmpDir, "mando-state.json");
+    const errorFile = join(tmpDir, "mando-error.json");
     writeFileSync(
       configPath,
       JSON.stringify({ hubUrl: hubBaseUrl, token: seeded.token, machineName }, null, 2),
@@ -93,7 +94,14 @@ export async function bringMachineOnline(
       "bun",
       [join(REPO_ROOT, "packages/agent/src/index.ts"), "connect", "--opencode-port", String(stub.port)],
       REPO_ROOT,
-      { ...process.env, MANDO_CONFIG: configPath, MANDO_PID_FILE: pidFile, MANDO_STATE_FILE: stateFile },
+      {
+        ...process.env,
+        MANDO_CONFIG: configPath,
+        MANDO_PID_FILE: pidFile,
+        MANDO_STATE_FILE: stateFile,
+        // See global-setup.ts's bringMachineOnline for why this is isolated too.
+        MANDO_ERROR_FILE: errorFile,
+      },
     );
 
     let stopped = false;

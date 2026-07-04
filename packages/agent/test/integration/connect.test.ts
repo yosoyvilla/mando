@@ -165,6 +165,11 @@ beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), "mando-connect-itest-"));
   process.env.MANDO_CONFIG = join(tmpDir, "config.json");
   process.env.MANDO_PID_FILE = join(tmpDir, "pid");
+  // defaultSpawnDaemon passes this process's env through to the real
+  // spawned daemon subprocess, so setting this here isolates both
+  // connect()'s post-spawn check and the daemon's own writes from a real
+  // ~/.mando-error.json on the host.
+  process.env.MANDO_ERROR_FILE = join(tmpDir, "error.json");
 });
 
 afterEach(() => {
@@ -187,6 +192,7 @@ afterEach(() => {
 
   delete process.env.MANDO_CONFIG;
   delete process.env.MANDO_PID_FILE;
+  delete process.env.MANDO_ERROR_FILE;
   if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
   tmpDir = null;
 });
