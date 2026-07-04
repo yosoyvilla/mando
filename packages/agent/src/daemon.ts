@@ -1,0 +1,300 @@
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { homedir } from "node:os";
+import { parseFrame, serializeFrame, type Frame } from "@mando/protocol";
+import { readConfig } from "./config";
+import { nextDelay as defaultNextDelay } from "./reconnect";
+import { checkHealth as defaultCheckHealth } from "./opencode";
+import { forward } from "./forward";
+
+// Kept in one place (matching the agent's package.json) rather than wired
+// through build tooling -- this is the only place it's used (the `hello`
+// frame's `agentVersion` field is informational for the hub, not parsed).
+const AGENT_VERSION = "0.1.0";
+
+const DEFAULT_HEALTH_CHECK_INTERVAL_MS = 15_000;
+// How many consecutive failed local-opencode health probes it takes
+// before the daemon gives up on this session and exits. At the default
+// 15s interval that's 45s of the local opencode server being completely
+// unreachable -- long enough to ride out a brief restart/reload, short
+// enough that a genuinely closed opencode session doesn't leave a daemon
+// (and its open hub tunnel) running forever.
+const DEFAULT_MAX_CONSECUTIVE_HEALTH_FAILURES = 3;
+
+export function defaultPidFilePath(): string {
+  return process.env.MANDO_PID_FILE ?? join(homedir(), ".mando-pid");
+}
+
+export function writePidFile(path: string, pid: number): void {
+  const parentDir = dirname(path);
+  if (!existsSync(parentDir)) mkdirSync(parentDir, { recursive: true });
+  writeFileSync(path, String(pid), "utf-8");
+}
+
+export function readPidFile(path: string): number | null {
+  if (!existsSync(path)) return null;
+  const raw = readFileSync(path, "utf-8").trim();
+  const pid = Number(raw);
+  return Number.isInteger(pid) && pid > 0 ? pid : null;
+}
+
+export function removePidFile(path: string): void {
+  try {
+    unlinkSync(path);
+  } catch {
+    // Already gone -- fine, disconnect()/a previous stop() may have
+    // removed it already.
+  }
+}
+
+// The subset of the WebSocket client interface the daemon loop actually
+// uses. `WebSocket` (Bun's global, spec-shaped client) satisfies this
+// structurally, so the real default (`(url) => new WebSocket(url)`) needs
+// no cast -- but tests can hand `runDaemon` a much smaller fake that only
+// implements these four members, without a real socket or network at all.
+export interface DaemonSocket {
+  readyState: number;
+  send(data: string): void;
+  close(code?: number, reason?: string): void;
+  addEventListener(type: "open" | "message" | "close" | "error", listener: (evt: any) => void): void;
+}
+
+export type DaemonEvent =
+  | { type: "connecting"; attempt: number }
+  | { type: "registered"; machineId: string }
+  | { type: "hub_error"; code: string; message: string }
+  | { type: "reconnect_scheduled"; attempt: number; delayMs: number }
+  | { type: "health_check"; healthy: boolean; consecutiveFailures: number }
+  | { type: "stopped"; reason: string };
+
+export interface DaemonOptions {
+  hubUrl: string;
+  token: string;
+  machineName: string;
+  opencodePort: number;
+  agentVersion?: string;
+  opencodePassword?: string;
+  pidFile?: string;
+  // All of the below are injection points for tests -- so the message
+  // loop, reconnect backoff, and health polling can be driven
+  // deterministically and fast, without a real socket, real opencode
+  // server, or waiting out real backoff/interval delays.
+  wsFactory?: (url: string) => DaemonSocket;
+  nextDelay?: (attempt: number) => number;
+  checkHealth?: (port: number) => Promise<boolean>;
+  healthCheckIntervalMs?: number;
+  maxConsecutiveHealthFailures?: number;
+  // External stop signal. The real detached-process entrypoint (see
+  // `import.meta.main` below) wires SIGTERM/SIGINT into an AbortController
+  // and passes its signal here, so OS-signal handling stays outside the
+  // loop logic and `runDaemon` itself stays testable by simply calling
+  // `controller.abort()`.
+  signal?: AbortSignal;
+  onEvent?: (event: DaemonEvent) => void;
+}
+
+// runDaemon is the long-running WS message loop described in the task
+// brief: connect -> hello -> registered, then dispatch ping/http_request/
+// cancel/status for as long as the connection (and the local opencode
+// server) stays alive, reconnecting with `nextDelay` backoff on any drop.
+// It resolves -- it never calls `process.exit` itself -- when the loop
+// decides to stop: an unrecoverable hub error (e.g. a revoked token),
+// `opts.signal` firing, or `maxConsecutiveHealthFailures` consecutive
+// failed local-opencode health probes. Not calling process.exit keeps this
+// function directly unit-testable in-process; the `import.meta.main` block
+// below is what actually exits the process when this runs as the spawned
+// detached child.
+export async function runDaemon(opts: DaemonOptions): Promise<void> {
+  const {
+    hubUrl,
+    token,
+    machineName,
+    opencodePort,
+    agentVersion = AGENT_VERSION,
+    opencodePassword,
+    pidFile = defaultPidFilePath(),
+    wsFactory = (url: string) => new WebSocket(url),
+    nextDelay = defaultNextDelay,
+    checkHealth = defaultCheckHealth,
+    healthCheckIntervalMs = DEFAULT_HEALTH_CHECK_INTERVAL_MS,
+    maxConsecutiveHealthFailures = DEFAULT_MAX_CONSECUTIVE_HEALTH_FAILURES,
+    signal,
+    onEvent = () => {},
+  } = opts;
+
+  writePidFile(pidFile, process.pid);
+
+  let stopped = false;
+  let attempt = 0;
+  let consecutiveHealthFailures = 0;
+  let socket: DaemonSocket | null = null;
+  let healthTimer: ReturnType<typeof setInterval> | null = null;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  // One AbortController per in-flight http_request id, so a `cancel`
+  // frame for that id can abort exactly that forward() call (and nothing
+  // else) -- see forward.ts's `signal` option.
+  const inFlight = new Map<string, AbortController>();
+
+  function stop(reason: string): void {
+    if (stopped) return;
+    stopped = true;
+    if (healthTimer) clearInterval(healthTimer);
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    for (const controller of inFlight.values()) controller.abort();
+    inFlight.clear();
+    socket?.close();
+    removePidFile(pidFile);
+    onEvent({ type: "stopped", reason });
+  }
+
+  return new Promise<void>((resolve) => {
+    function finish(reason: string): void {
+      stop(reason);
+      resolve();
+    }
+
+    signal?.addEventListener("abort", () => finish("signal"), { once: true });
+
+    healthTimer = setInterval(() => {
+      if (stopped) return;
+      void checkHealth(opencodePort).then((healthy) => {
+        if (stopped) return;
+        consecutiveHealthFailures = healthy ? 0 : consecutiveHealthFailures + 1;
+        onEvent({ type: "health_check", healthy, consecutiveFailures: consecutiveHealthFailures });
+
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.send(
+            serializeFrame({ type: "status", id: crypto.randomUUID(), payload: { opencodeHealthy: healthy } }),
+          );
+        }
+
+        if (consecutiveHealthFailures >= maxConsecutiveHealthFailures) {
+          finish("opencode_unreachable");
+        }
+      });
+    }, healthCheckIntervalMs);
+
+    function scheduleReconnect(): void {
+      if (stopped) return;
+      const delayMs = nextDelay(attempt);
+      onEvent({ type: "reconnect_scheduled", attempt, delayMs });
+      attempt++;
+      reconnectTimer = setTimeout(() => {
+        if (!stopped) connectOnce();
+      }, delayMs);
+    }
+
+    function connectOnce(): void {
+      if (stopped) return;
+      onEvent({ type: "connecting", attempt });
+      const wsUrl = `${hubUrl.replace(/^http/, "ws")}/ws/agent`;
+      const ws = wsFactory(wsUrl);
+      socket = ws;
+
+      ws.addEventListener("open", () => {
+        if (stopped) return;
+        ws.send(
+          serializeFrame({
+            type: "hello",
+            id: crypto.randomUUID(),
+            payload: { token, machineName, opencodePort, agentVersion },
+          }),
+        );
+      });
+
+      ws.addEventListener("message", (evt: { data: unknown }) => {
+        if (stopped) return;
+        const raw = typeof evt.data === "string" ? evt.data : null;
+        if (raw === null) return;
+
+        let frame: Frame;
+        try {
+          frame = parseFrame(raw);
+        } catch {
+          return; // malformed frame from the hub -- ignore, don't crash the loop.
+        }
+
+        switch (frame.type) {
+          case "registered":
+            attempt = 0;
+            onEvent({ type: "registered", machineId: frame.payload.machineId });
+            return;
+          case "error":
+            // The hub only ever sends this for hello_timeout/unauthorized
+            // (see apps/hub/src/tunnel/ws.ts) -- both are unrecoverable by
+            // reconnecting with the same token, so stop rather than loop
+            // forever hammering the hub with the same bad credentials.
+            onEvent({ type: "hub_error", code: frame.payload.code, message: frame.payload.message });
+            finish(`hub_error:${frame.payload.code}`);
+            return;
+          case "ping":
+            ws.send(serializeFrame({ type: "pong", id: frame.id }));
+            return;
+          case "http_request": {
+            const controller = new AbortController();
+            inFlight.set(frame.id, controller);
+            void forward(frame, `http://127.0.0.1:${opencodePort}`, (f) => ws.send(serializeFrame(f)), {
+              opencodePassword,
+              signal: controller.signal,
+            }).finally(() => {
+              inFlight.delete(frame.id);
+            });
+            return;
+          }
+          case "cancel":
+            inFlight.get(frame.id)?.abort();
+            return;
+          default:
+            // hello/response_*/pong/status are never sent hub -> agent.
+            return;
+        }
+      });
+
+      ws.addEventListener("close", () => {
+        if (socket === ws) socket = null;
+        if (stopped) return;
+        scheduleReconnect();
+      });
+
+      // 'close' always fires after 'error' for a WebSocket, so
+      // reconnection is handled by the close handler above; nothing
+      // additional to do here beyond not crashing.
+      ws.addEventListener("error", () => {});
+    }
+
+    connectOnce();
+  });
+}
+
+if (import.meta.main) {
+  void (async () => {
+    const args = process.argv.slice(2);
+    const portIndex = args.indexOf("--opencode-port");
+    const opencodePort = portIndex >= 0 ? Number(args[portIndex + 1]) : NaN;
+    if (!Number.isInteger(opencodePort) || opencodePort <= 0) {
+      console.error("mando daemon: missing or invalid --opencode-port");
+      process.exit(1);
+    }
+
+    const config = readConfig();
+    if (!config || !config.token) {
+      console.error("mando daemon: no token configured; run `mando connect` first");
+      process.exit(1);
+    }
+
+    const controller = new AbortController();
+    process.on("SIGTERM", () => controller.abort());
+    process.on("SIGINT", () => controller.abort());
+
+    await runDaemon({
+      hubUrl: config.hubUrl,
+      token: config.token,
+      machineName: config.machineName,
+      opencodePort,
+      opencodePassword: process.env.MANDO_OPENCODE_PASSWORD,
+      signal: controller.signal,
+    });
+
+    process.exit(0);
+  })();
+}

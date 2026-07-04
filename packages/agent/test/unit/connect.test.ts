@@ -1,0 +1,146 @@
+import { describe, it, expect, afterEach, beforeEach } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { connect } from "../../src/connect";
+import { readConfig } from "../../src/config";
+
+let configDir: string | null = null;
+let originalConsoleLog: typeof console.log;
+let logs: string[] = [];
+
+beforeEach(() => {
+  configDir = mkdtempSync(join(tmpdir(), "mando-connect-test-"));
+  process.env.MANDO_CONFIG = join(configDir, "config.json");
+  logs = [];
+  originalConsoleLog = console.log;
+  console.log = (...args: unknown[]) => {
+    logs.push(args.map(String).join(" "));
+  };
+});
+
+afterEach(() => {
+  console.log = originalConsoleLog;
+  delete process.env.MANDO_CONFIG;
+  if (configDir) rmSync(configDir, { recursive: true, force: true });
+  configDir = null;
+});
+
+// A tiny stub for the hub's pairing endpoints -- POST /pairing/request
+// returns a fixed code immediately; GET /pairing/status reports "pending"
+// for the first `pendingPolls` calls, then "approved" with a token. This
+// is deliberately not the real hub (no Postgres, no pairing/service.ts) --
+// connect()'s pairing orchestration (request -> print -> poll -> store) is
+// what's under test here, not the hub's pairing logic itself (covered by
+// apps/hub/test/integration/pairing.test.ts).
+function startPairingStub(opts: { pendingPolls: number }): { server: ReturnType<typeof Bun.serve>; url: string } {
+  let polls = 0;
+  const server = Bun.serve({
+    port: 0,
+    fetch(req) {
+      const url = new URL(req.url);
+      if (req.method === "POST" && url.pathname === "/api/v1/pairing/request") {
+        return Response.json({ code: "ABCD-1234", expiresAt: new Date(Date.now() + 60_000).toISOString() }, { status: 201 });
+      }
+      if (req.method === "GET" && url.pathname === "/api/v1/pairing/status") {
+        polls++;
+        if (polls > opts.pendingPolls) {
+          return Response.json({ status: "approved", token: "tok-id.secret" }, { status: 200 });
+        }
+        return Response.json({ status: "pending" }, { status: 200 });
+      }
+      return new Response("not found", { status: 404 });
+    },
+  });
+  return { server, url: `http://localhost:${server.port}` };
+}
+
+describe("connect (pairing flow)", () => {
+  it("prints the pairing code, polls until approved, stores the token, then spawns and prints connected", async () => {
+    const { server, url } = startPairingStub({ pendingPolls: 2 });
+    const spawnCalls: number[] = [];
+
+    try {
+      const result = await connect({
+        hub: url,
+        opencodePort: 4096,
+        pairingPollIntervalMs: 5,
+        spawnDaemon: (port) => {
+          spawnCalls.push(port);
+          return 12345;
+        },
+      });
+
+      expect(result).toEqual({ status: "connected", machine: expect.any(String), uiUrl: url });
+
+      const pairingLog = logs.find((l) => l.includes("Pairing code: ABCD-1234"));
+      expect(pairingLog).toBeDefined();
+
+      const connectedLog = logs.find((l) => l.includes("Connected as"));
+      expect(connectedLog).toBeDefined();
+
+      expect(spawnCalls).toEqual([4096]);
+
+      const config = readConfig();
+      expect(config?.token).toBe("tok-id.secret");
+      expect(config?.hubUrl).toBe(url);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  it("returns an error result (and prints one) when the pairing code expires before approval", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        if (req.method === "POST" && url.pathname === "/api/v1/pairing/request") {
+          // Already expired by the time connect() polls.
+          return Response.json({ code: "DEAD-CODE", expiresAt: new Date(Date.now() - 1).toISOString() }, { status: 201 });
+        }
+        return new Response("not found", { status: 404 });
+      },
+    });
+    const url = `http://localhost:${server.port}`;
+
+    try {
+      const result = await connect({ hub: url, pairingPollIntervalMs: 5, spawnDaemon: () => 1 });
+      expect(result.status).toBe("error");
+      if (result.status === "error") expect(result.message).toContain("expired");
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  it("skips pairing entirely when a token is already configured, going straight to detect+spawn", async () => {
+    const { writeConfig } = await import("../../src/config");
+    writeConfig({ hubUrl: "http://existing.invalid", token: "already-have-one", machineName: "known-machine" });
+
+    const spawnCalls: number[] = [];
+    const result = await connect({
+      opencodePort: 4097,
+      spawnDaemon: (port) => {
+        spawnCalls.push(port);
+        return 1;
+      },
+    });
+
+    expect(result).toEqual({ status: "connected", machine: "known-machine", uiUrl: "http://existing.invalid" });
+    expect(spawnCalls).toEqual([4097]);
+    expect(logs.some((l) => l.includes("Pairing code"))).toBe(false);
+  });
+
+  it("returns an error when no hub URL can be resolved", async () => {
+    const result = await connect({});
+    expect(result.status).toBe("error");
+  });
+
+  it("returns an error when opencode detection fails and no explicit port was given", async () => {
+    const { writeConfig } = await import("../../src/config");
+    writeConfig({ hubUrl: "http://existing.invalid", token: "tok", machineName: "m" });
+
+    const result = await connect({ detectOpencodePort: async () => null, spawnDaemon: () => 1 });
+    expect(result.status).toBe("error");
+    if (result.status === "error") expect(result.message).toContain("opencode");
+  });
+});
