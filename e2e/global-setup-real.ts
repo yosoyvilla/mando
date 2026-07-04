@@ -138,10 +138,14 @@ export default async function globalSetup(_config: FullConfig): Promise<() => Pr
   const tmpDir = mkdtempSync(join(tmpdir(), "mando-e2e-real-"));
 
   await ensurePostgres();
-  await pruneStaleMachine();
 
+  // Start the hub first: its startup path runs the DB migrations, so the
+  // `machines` table exists before pruneStaleMachine() touches it. On a
+  // fresh CI database the old order (prune before hub start) threw
+  // `relation "machines" does not exist`.
   const hubProcess = startHub();
   await waitForHubHealthy();
+  await pruneStaleMachine();
 
   let opencode: RealOpencode | null = null;
   try {
