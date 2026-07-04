@@ -74,7 +74,7 @@ export function useSessionMessages(sessionId: string | undefined) {
   const backend = useBackend();
   const key =
     backend && sessionId
-      ? ([backend.machineId, `/session/${sessionId}/messages`] as const)
+      ? ([backend.machineId, `/api/session/${sessionId}/message`] as const)
       : null;
 
   const {
@@ -102,7 +102,7 @@ export function useSessionMessages(sessionId: string | undefined) {
 }
 
 export function getMessagesKey(machineId: string, sessionId: string) {
-  return [machineId, `/session/${sessionId}/messages`] as const;
+  return [machineId, `/api/session/${sessionId}/message`] as const;
 }
 
 export function mutateSessionMessages(machineId: string, sessionId: string) {
@@ -129,11 +129,17 @@ export function sortSessionMessages(messages: SessionMessage[]) {
 }
 
 function normalizeFetchedMessages(data: unknown) {
+  // Real opencode wraps `GET /api/session/:id/message` as
+  // `{ data: SessionMessage[], cursor }` (confirmed via /doc + live curl
+  // against opencode 1.17.13). The `items` fallback below predates that
+  // verification and is kept only for defensiveness against older shapes.
   const messages = Array.isArray(data)
     ? data
-    : isRecord(data) && Array.isArray(data.items)
-      ? data.items
-      : [];
+    : isRecord(data) && Array.isArray(data.data)
+      ? data.data
+      : isRecord(data) && Array.isArray(data.items)
+        ? data.items
+        : [];
 
   if (messages.some(isMessageWithParts)) {
     return sortSessionMessages(

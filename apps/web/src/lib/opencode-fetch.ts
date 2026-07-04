@@ -1,9 +1,9 @@
 // Shared request helpers that route opencode API calls through the hub's
-// per-machine proxy (`HubClient.opencode(machineId)`) instead of the old
-// local-mode `/api/{provider}/{port}` paths. `path` here is exactly the
-// same relative opencode-wrapper path the old local-mode server used
-// (e.g. "/sessions", "/session/create", "/session/:id/messages") -- only
-// the transport changed.
+// per-machine proxy (`HubClient.opencode(machineId)`). `path` here is a
+// REAL opencode HTTP path (e.g. "/api/session", "/api/session/:id/message")
+// -- the hub forwards it verbatim to the machine's local `opencode serve`
+// process (apps/hub/src/proxy/routes.ts does no rewriting), so callers must
+// use opencode's actual API surface, not an invented wrapper shape.
 import { hubClient } from "@/lib/hub-client-instance";
 import type { HubClient } from "@/lib/hub-client";
 

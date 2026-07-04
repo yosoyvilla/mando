@@ -31,7 +31,6 @@ import { useBreadcrumb } from "@/contexts/breadcrumb-context";
 import {
   useSessionMessages,
   addOptimisticMessage,
-  reconcileOptimisticMessage,
   settleOptimisticMessage,
   removeOptimisticMessage,
   mutateSessionMessages,
@@ -57,21 +56,13 @@ import {
 } from "@/lib/agent-selection";
 import { getErrorMessage, getResponseErrorMessage } from "@/lib/error-message";
 import { opencodeJson, opencodeRequest } from "@/lib/opencode-fetch";
-import type { Agent, Session, SessionMessage } from "@opencode-ai/sdk/v2";
+import type { Agent, Session } from "@opencode-ai/sdk/v2";
 
 export const Route = createFileRoute("/_app/session/$id")({
   component: SessionPage,
 });
 
 type PermissionReply = "once" | "always" | "reject";
-
-interface PromptSendResponse {
-  accepted: boolean;
-  duplicate?: boolean;
-  mode?: "v2" | "legacy";
-  message?: SessionMessage;
-  messageID?: string;
-}
 
 function isValidSessionAgent(agents: Agent[], name?: string) {
   return isValidUserSelectableAgent(agents, name);
@@ -395,7 +386,7 @@ function QuestionAnswerForm({
       if (!match) {
         const latestQuestions = await opencodeJson<QuestionRequest[]>(
           machineId,
-          "/questions",
+          "/question",
         );
         match =
           latestQuestions.find((q) => q.tool?.callID === callID) ??
@@ -985,6 +976,45 @@ function SessionPage() {
       if (!sessionId || !machineId) return;
 
       try {
+        // Real opencode's `POST /api/session/:id/prompt` body only accepts
+        // `{ id?, prompt: { text, files?, agents? }, delivery?, resume? }`
+        // -- there is no `model`/`agent` field on that request (confirmed
+        // via /doc's OpenAPI schema, additionalProperties:false). Switching
+        // model/agent for a session are their own endpoints; call them
+        // first, only when the desired value actually differs from the
+        // session's current one.
+        if (
+          selectedModel.providerID &&
+          selectedModel.modelID &&
+          (currentSession?.model?.id !== selectedModel.modelID ||
+            currentSession?.model?.providerID !== selectedModel.providerID)
+        ) {
+          const modelResponse = await opencodeRequest(
+            machineId,
+            `/api/session/${sessionId}/model`,
+            {
+              method: "POST",
+              body: JSON.stringify({
+                model: {
+                  id: selectedModel.modelID,
+                  providerID: selectedModel.providerID,
+                  ...(selectedModel.variant
+                    ? { variant: selectedModel.variant }
+                    : {}),
+                },
+              }),
+            },
+          );
+          if (!modelResponse.ok) {
+            throw new Error(
+              await getResponseErrorMessage(
+                modelResponse,
+                `Failed to switch model (${modelResponse.status})`,
+              ),
+            );
+          }
+        }
+
         let agentOverride: string | undefined;
         if (supportsAgentSelection) {
           const defaultAgent = isValidSessionAgent(
@@ -999,19 +1029,33 @@ function SessionPage() {
               : undefined;
         }
 
+        if (agentOverride && agentOverride !== currentSession?.agent) {
+          const agentResponse = await opencodeRequest(
+            machineId,
+            `/api/session/${sessionId}/agent`,
+            {
+              method: "POST",
+              body: JSON.stringify({ agent: agentOverride }),
+            },
+          );
+          if (!agentResponse.ok) {
+            throw new Error(
+              await getResponseErrorMessage(
+                agentResponse,
+                `Failed to switch agent (${agentResponse.status})`,
+              ),
+            );
+          }
+        }
+
         const response = await opencodeRequest(
           machineId,
-          `/session/${sessionId}/prompt`,
+          `/api/session/${sessionId}/prompt`,
           {
             method: "POST",
             body: JSON.stringify({
-              messageID: messageId,
-              text: messageText,
-              model:
-                selectedModel.providerID && selectedModel.modelID
-                  ? selectedModel
-                  : undefined,
-              agent: agentOverride,
+              id: messageId,
+              prompt: { text: messageText },
             }),
           },
         );
@@ -1023,17 +1067,13 @@ function SessionPage() {
           throw new Error(await getResponseErrorMessage(response, fallback));
         }
 
-        const result = (await response.json()) as PromptSendResponse;
-        if (result.message?.id) {
-          reconcileOptimisticMessage(
-            machineId,
-            sessionId,
-            messageId,
-            result.message,
-          );
-        } else {
-          settleOptimisticMessage(machineId, sessionId, messageId);
-        }
+        // `SessionInputAdmitted` (the real response's `data`) doesn't carry
+        // a fully-formed message -- the assistant turn arrives later via
+        // SSE. Since `messageId` (our own client-generated id, `^msg_...`)
+        // was sent as the request's `id` and already backs the optimistic
+        // user message, no reconciliation swap is needed; just clear its
+        // pending state.
+        settleOptimisticMessage(machineId, sessionId, messageId);
 
         isNearBottomRef.current = true;
         mutateSessionMessages(machineId, sessionId);
@@ -1050,6 +1090,7 @@ function SessionPage() {
       sessionId,
       machineId,
       currentSession?.agent,
+      currentSession?.model,
       agents,
       selectedAgent,
       supportsAgentSelection,

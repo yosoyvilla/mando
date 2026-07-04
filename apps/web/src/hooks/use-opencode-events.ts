@@ -18,24 +18,38 @@ import {
 } from "@/hooks/use-session-messages";
 import { opencodeEvents } from "@/lib/opencode-fetch";
 
-type RuntimeEvent =
-  | Event
-  | {
-      id: string;
-      type: "server.heartbeat" | "mando.event.error";
-      properties: Record<string, unknown>;
-    };
+// The installed `@opencode-ai/sdk` (1.14.41) types this union's payload
+// field as `properties`, but a live opencode 1.17.13 server actually sends
+// it under `data` -- confirmed by reading raw `/api/event` SSE frames
+// (`data: {"id":"evt_...","type":"session.next.text.delta","data":{...}}`)
+// against `/doc`'s OpenAPI schema, both of which agree on `data`. The SDK's
+// declared field name is simply stale for this version of the server. This
+// mapped type renames the field while preserving the exhaustive
+// discriminated-union narrowing on `.type` (and each case's real payload
+// shape) that the SDK's `Event` union already provides.
+// `T` must stay a naked type parameter for the conditional to distribute
+// over each member of the `Event` union individually -- inlining `Event`
+// directly in the `extends` clause would collapse the union into one
+// non-discriminated check instead.
+type RenameProperties<T> = T extends { properties: infer P }
+  ? Omit<T, "properties"> & { data: P }
+  : T;
 
+type RuntimeEvent = RenameProperties<Event>;
+
+// These keys must match the SWR keys the corresponding hooks in
+// use-opencode.ts subscribe with exactly -- `mutate(key)` only invalidates
+// the cache entry for that literal key tuple.
 function sessionsKey(machineId: string) {
-  return [machineId, "/sessions"] as const;
+  return [machineId, "/api/session"] as const;
 }
 
 function permissionsKey(machineId: string) {
-  return [machineId, "/permissions"] as const;
+  return [machineId, "/permission"] as const;
 }
 
 function questionsKey(machineId: string) {
-  return [machineId, "/questions"] as const;
+  return [machineId, "/question"] as const;
 }
 
 function gitDiffKey(machineId: string) {
@@ -47,7 +61,7 @@ function currentProjectKey(machineId: string) {
 }
 
 function sessionStatusKey(machineId: string) {
-  return [machineId, "/session/status"] as const;
+  return [machineId, "/api/session/active"] as const;
 }
 
 function upsertById<T extends { id: string }>(items: T[] | undefined, item: T) {
@@ -327,24 +341,20 @@ function applyEvent(
       revalidateInstance(machineId);
       break;
 
-    case "server.heartbeat":
-    case "mando.event.error":
-      break;
-
     case "session.created":
     case "session.updated":
       mutateSessions(machineId, (items) =>
-        sortSessions(upsertById(items, event.properties.info)),
+        sortSessions(upsertById(items, event.data.info)),
       );
       break;
 
     case "session.deleted":
       mutateSessions(machineId, (items) =>
-        removeById(items, event.properties.sessionID),
+        removeById(items, event.data.sessionID),
       );
       mutateSessionStatuses(machineId, (items) => {
         const next = { ...items };
-        delete next[event.properties.sessionID];
+        delete next[event.data.sessionID];
         return next;
       });
       break;
@@ -352,56 +362,56 @@ function applyEvent(
     case "session.status":
       mutateSessionStatuses(machineId, (items) => ({
         ...items,
-        [event.properties.sessionID]: event.properties.status,
+        [event.data.sessionID]: event.data.status,
       }));
       break;
 
     case "session.idle":
       mutateSessionStatuses(machineId, (items) => ({
         ...items,
-        [event.properties.sessionID]: { type: "idle" },
+        [event.data.sessionID]: { type: "idle" },
       }));
-      revalidateMessagesNow(machineId, event.properties.sessionID);
+      revalidateMessagesNow(machineId, event.data.sessionID);
       break;
 
     case "session.next.agent.switched":
-      mutateMessages(machineId, event.properties.sessionID, (items) =>
+      mutateMessages(machineId, event.data.sessionID, (items) =>
         upsertMessage(items, {
           id: event.id,
           type: "agent-switched",
-          agent: event.properties.agent,
+          agent: event.data.agent,
           time: {
-            created: event.properties.timestamp,
+            created: event.data.timestamp,
           },
         }),
       );
       break;
 
     case "session.next.model.switched":
-      mutateMessages(machineId, event.properties.sessionID, (items) =>
+      mutateMessages(machineId, event.data.sessionID, (items) =>
         upsertMessage(items, {
           id: event.id,
           type: "model-switched",
-          model: event.properties.model,
+          model: event.data.model,
           time: {
-            created: event.properties.timestamp,
+            created: event.data.timestamp,
           },
         }),
       );
       break;
 
     case "session.next.prompted":
-      mutateMessages(machineId, event.properties.sessionID, (items) =>
+      mutateMessages(machineId, event.data.sessionID, (items) =>
         upsertMessage(
-          removeMatchingOptimisticUser(items, event.properties.prompt.text),
+          removeMatchingOptimisticUser(items, event.data.prompt.text),
           {
             id: event.id,
             type: "user",
-            text: event.properties.prompt.text,
-            files: event.properties.prompt.files,
-            agents: event.properties.prompt.agents,
+            text: event.data.prompt.text,
+            files: event.data.prompt.files,
+            agents: event.data.prompt.agents,
             time: {
-              created: event.properties.timestamp,
+              created: event.data.timestamp,
             },
           },
         ),
@@ -409,40 +419,40 @@ function applyEvent(
       break;
 
     case "session.next.synthetic":
-      mutateMessages(machineId, event.properties.sessionID, (items) =>
+      mutateMessages(machineId, event.data.sessionID, (items) =>
         upsertMessage(items, {
           id: event.id,
           type: "synthetic",
-          sessionID: event.properties.sessionID,
-          text: event.properties.text,
+          sessionID: event.data.sessionID,
+          text: event.data.text,
           time: {
-            created: event.properties.timestamp,
+            created: event.data.timestamp,
           },
         }),
       );
       break;
 
     case "session.next.shell.started":
-      mutateMessages(machineId, event.properties.sessionID, (items) =>
+      mutateMessages(machineId, event.data.sessionID, (items) =>
         upsertMessage(items, {
           id: event.id,
           type: "shell",
-          callID: event.properties.callID,
-          command: event.properties.command,
+          callID: event.data.callID,
+          command: event.data.command,
           output: "",
           time: {
-            created: event.properties.timestamp,
+            created: event.data.timestamp,
           },
         }),
       );
       break;
 
     case "session.next.shell.ended":
-      mutateMessages(machineId, event.properties.sessionID, (items) => {
+      mutateMessages(machineId, event.data.sessionID, (items) => {
         const index = findLastIndex(
           items,
           (item) =>
-            item.type === "shell" && item.callID === event.properties.callID,
+            item.type === "shell" && item.callID === event.data.callID,
         );
         if (index < 0) return items;
 
@@ -450,49 +460,49 @@ function applyEvent(
         if (shell.type !== "shell") return items;
         return replaceMessageAt(items, index, {
           ...shell,
-          output: event.properties.output,
+          output: event.data.output,
           time: {
             ...shell.time,
-            completed: event.properties.timestamp,
+            completed: event.data.timestamp,
           },
         });
       });
       break;
 
     case "session.next.step.started":
-      mutateMessages(machineId, event.properties.sessionID, (items) =>
-        upsertMessage(closeActiveAssistant(items, event.properties.timestamp), {
+      mutateMessages(machineId, event.data.sessionID, (items) =>
+        upsertMessage(closeActiveAssistant(items, event.data.timestamp), {
           id: event.id,
           type: "assistant",
-          agent: event.properties.agent,
-          model: event.properties.model,
+          agent: event.data.agent,
+          model: event.data.model,
           content: [],
           time: {
-            created: event.properties.timestamp,
+            created: event.data.timestamp,
           },
-          ...(event.properties.snapshot
-            ? { snapshot: { start: event.properties.snapshot } }
+          ...(event.data.snapshot
+            ? { snapshot: { start: event.data.snapshot } }
             : {}),
         }),
       );
       break;
 
     case "session.next.step.ended":
-      mutateMessages(machineId, event.properties.sessionID, (items) =>
+      mutateMessages(machineId, event.data.sessionID, (items) =>
         updateActiveAssistant(items, (assistant) => ({
           ...assistant,
-          finish: event.properties.finish,
-          cost: event.properties.cost,
-          tokens: event.properties.tokens,
+          finish: event.data.finish,
+          cost: event.data.cost,
+          tokens: event.data.tokens,
           time: {
             ...assistant.time,
-            completed: event.properties.timestamp,
+            completed: event.data.timestamp,
           },
-          ...(event.properties.snapshot
+          ...(event.data.snapshot
             ? {
                 snapshot: {
                   ...(assistant.snapshot ?? {}),
-                  end: event.properties.snapshot,
+                  end: event.data.snapshot,
                 },
               }
             : {}),
@@ -501,21 +511,21 @@ function applyEvent(
       break;
 
     case "session.next.step.failed":
-      mutateMessages(machineId, event.properties.sessionID, (items) =>
+      mutateMessages(machineId, event.data.sessionID, (items) =>
         updateActiveAssistant(items, (assistant) => ({
           ...assistant,
           finish: "error",
-          error: event.properties.error,
+          error: event.data.error,
           time: {
             ...assistant.time,
-            completed: event.properties.timestamp,
+            completed: event.data.timestamp,
           },
         })),
       );
       break;
 
     case "session.next.text.started":
-      mutateMessages(machineId, event.properties.sessionID, (items) =>
+      mutateMessages(machineId, event.data.sessionID, (items) =>
         appendAssistantContent(items, {
           type: "text",
           text: "",
@@ -524,7 +534,7 @@ function applyEvent(
       break;
 
     case "session.next.text.delta":
-      mutateMessages(machineId, event.properties.sessionID, (items) =>
+      mutateMessages(machineId, event.data.sessionID, (items) =>
         updateActiveAssistant(items, (assistant) => {
           const textIndex = latestTextIndex(assistant);
           if (textIndex < 0) return assistant;
@@ -535,7 +545,7 @@ function applyEvent(
           const content = [...assistant.content];
           content[textIndex] = {
             ...text,
-            text: `${text.text}${event.properties.delta}`,
+            text: `${text.text}${event.data.delta}`,
           } satisfies SessionMessageAssistantText;
           return { ...assistant, content };
         }),
@@ -543,7 +553,7 @@ function applyEvent(
       break;
 
     case "session.next.text.ended":
-      mutateMessages(machineId, event.properties.sessionID, (items) =>
+      mutateMessages(machineId, event.data.sessionID, (items) =>
         updateActiveAssistant(items, (assistant) => {
           const textIndex = latestTextIndex(assistant);
           if (textIndex < 0) return assistant;
@@ -554,7 +564,7 @@ function applyEvent(
           const content = [...assistant.content];
           content[textIndex] = {
             ...text,
-            text: event.properties.text,
+            text: event.data.text,
           } satisfies SessionMessageAssistantText;
           return { ...assistant, content };
         }),
@@ -562,21 +572,21 @@ function applyEvent(
       break;
 
     case "session.next.reasoning.started":
-      mutateMessages(machineId, event.properties.sessionID, (items) =>
+      mutateMessages(machineId, event.data.sessionID, (items) =>
         appendAssistantContent(items, {
           type: "reasoning",
-          id: event.properties.reasoningID,
+          id: event.data.reasoningID,
           text: "",
         }),
       );
       break;
 
     case "session.next.reasoning.delta":
-      mutateMessages(machineId, event.properties.sessionID, (items) =>
+      mutateMessages(machineId, event.data.sessionID, (items) =>
         updateActiveAssistant(items, (assistant) => {
           const reasoningIndex = latestReasoningIndex(
             assistant,
-            event.properties.reasoningID,
+            event.data.reasoningID,
           );
           if (reasoningIndex < 0) return assistant;
 
@@ -586,7 +596,7 @@ function applyEvent(
           const content = [...assistant.content];
           content[reasoningIndex] = {
             ...reasoning,
-            text: `${reasoning.text}${event.properties.delta}`,
+            text: `${reasoning.text}${event.data.delta}`,
           } satisfies SessionMessageAssistantReasoning;
           return { ...assistant, content };
         }),
@@ -594,11 +604,11 @@ function applyEvent(
       break;
 
     case "session.next.reasoning.ended":
-      mutateMessages(machineId, event.properties.sessionID, (items) =>
+      mutateMessages(machineId, event.data.sessionID, (items) =>
         updateActiveAssistant(items, (assistant) => {
           const reasoningIndex = latestReasoningIndex(
             assistant,
-            event.properties.reasoningID,
+            event.data.reasoningID,
           );
           if (reasoningIndex < 0) return assistant;
 
@@ -608,7 +618,7 @@ function applyEvent(
           const content = [...assistant.content];
           content[reasoningIndex] = {
             ...reasoning,
-            text: event.properties.text,
+            text: event.data.text,
           } satisfies SessionMessageAssistantReasoning;
           return { ...assistant, content };
         }),
@@ -616,13 +626,13 @@ function applyEvent(
       break;
 
     case "session.next.tool.input.started":
-      mutateMessages(machineId, event.properties.sessionID, (items) =>
+      mutateMessages(machineId, event.data.sessionID, (items) =>
         appendAssistantContent(items, {
           type: "tool",
-          id: event.properties.callID,
-          name: event.properties.name,
+          id: event.data.callID,
+          name: event.data.name,
           time: {
-            created: event.properties.timestamp,
+            created: event.data.timestamp,
           },
           state: {
             status: "pending",
@@ -633,15 +643,15 @@ function applyEvent(
       break;
 
     case "session.next.tool.input.delta":
-      mutateMessages(machineId, event.properties.sessionID, (items) =>
+      mutateMessages(machineId, event.data.sessionID, (items) =>
         updateActiveAssistant(items, (assistant) =>
-          updateLatestTool(assistant, event.properties.callID, (tool) => {
+          updateLatestTool(assistant, event.data.callID, (tool) => {
             if (tool.state.status !== "pending") return tool;
             return {
               ...tool,
               state: {
                 ...tool.state,
-                input: `${tool.state.input}${event.properties.delta}`,
+                input: `${tool.state.input}${event.data.delta}`,
               },
             };
           }),
@@ -650,15 +660,15 @@ function applyEvent(
       break;
 
     case "session.next.tool.input.ended":
-      mutateMessages(machineId, event.properties.sessionID, (items) =>
+      mutateMessages(machineId, event.data.sessionID, (items) =>
         updateActiveAssistant(items, (assistant) =>
-          updateLatestTool(assistant, event.properties.callID, (tool) => {
+          updateLatestTool(assistant, event.data.callID, (tool) => {
             if (tool.state.status !== "pending") return tool;
             return {
               ...tool,
               state: {
                 ...tool.state,
-                input: event.properties.text,
+                input: event.data.text,
               },
             };
           }),
@@ -667,19 +677,19 @@ function applyEvent(
       break;
 
     case "session.next.tool.called":
-      mutateMessages(machineId, event.properties.sessionID, (items) =>
+      mutateMessages(machineId, event.data.sessionID, (items) =>
         updateActiveAssistant(items, (assistant) =>
-          updateLatestTool(assistant, event.properties.callID, (tool) => ({
+          updateLatestTool(assistant, event.data.callID, (tool) => ({
             ...tool,
-            name: event.properties.tool,
-            provider: event.properties.provider,
+            name: event.data.tool,
+            provider: event.data.provider,
             time: {
               ...tool.time,
-              ran: event.properties.timestamp,
+              ran: event.data.timestamp,
             },
             state: {
               status: "running",
-              input: event.properties.input,
+              input: event.data.input,
               structured: {},
               content: [],
             },
@@ -689,16 +699,16 @@ function applyEvent(
       break;
 
     case "session.next.tool.progress":
-      mutateMessages(machineId, event.properties.sessionID, (items) =>
+      mutateMessages(machineId, event.data.sessionID, (items) =>
         updateActiveAssistant(items, (assistant) =>
-          updateLatestTool(assistant, event.properties.callID, (tool) => {
+          updateLatestTool(assistant, event.data.callID, (tool) => {
             if (tool.state.status !== "running") return tool;
             return {
               ...tool,
               state: {
                 ...tool.state,
-                structured: event.properties.structured,
-                content: [...event.properties.content],
+                structured: event.data.structured,
+                content: [...event.data.content],
               },
             };
           }),
@@ -707,9 +717,9 @@ function applyEvent(
       break;
 
     case "session.next.tool.success":
-      mutateMessages(machineId, event.properties.sessionID, (items) =>
+      mutateMessages(machineId, event.data.sessionID, (items) =>
         updateActiveAssistant(items, (assistant) =>
-          updateLatestTool(assistant, event.properties.callID, (tool) => {
+          updateLatestTool(assistant, event.data.callID, (tool) => {
             const input =
               tool.state.status === "running" ||
               tool.state.status === "completed"
@@ -717,16 +727,16 @@ function applyEvent(
                 : {};
             return {
               ...tool,
-              provider: event.properties.provider,
+              provider: event.data.provider,
               time: {
                 ...tool.time,
-                completed: event.properties.timestamp,
+                completed: event.data.timestamp,
               },
               state: {
                 status: "completed",
                 input,
-                structured: event.properties.structured,
-                content: [...event.properties.content],
+                structured: event.data.structured,
+                content: [...event.data.content],
               },
             };
           }),
@@ -735,9 +745,9 @@ function applyEvent(
       break;
 
     case "session.next.tool.failed":
-      mutateMessages(machineId, event.properties.sessionID, (items) =>
+      mutateMessages(machineId, event.data.sessionID, (items) =>
         updateActiveAssistant(items, (assistant) =>
-          updateLatestTool(assistant, event.properties.callID, (tool) => {
+          updateLatestTool(assistant, event.data.callID, (tool) => {
             const input =
               tool.state.status === "running" ||
               tool.state.status === "completed"
@@ -757,17 +767,17 @@ function applyEvent(
                 : [];
             return {
               ...tool,
-              provider: event.properties.provider,
+              provider: event.data.provider,
               time: {
                 ...tool.time,
-                completed: event.properties.timestamp,
+                completed: event.data.timestamp,
               },
               state: {
                 status: "error",
                 input,
                 structured,
                 content,
-                error: event.properties.error,
+                error: event.data.error,
               },
             };
           }),
@@ -776,25 +786,25 @@ function applyEvent(
       break;
 
     case "session.next.retried":
-      revalidateMessages(machineId, event.properties.sessionID);
+      revalidateMessages(machineId, event.data.sessionID);
       break;
 
     case "session.next.compaction.started":
-      mutateMessages(machineId, event.properties.sessionID, (items) =>
+      mutateMessages(machineId, event.data.sessionID, (items) =>
         upsertMessage(items, {
           id: event.id,
           type: "compaction",
-          reason: event.properties.reason,
+          reason: event.data.reason,
           summary: "",
           time: {
-            created: event.properties.timestamp,
+            created: event.data.timestamp,
           },
         }),
       );
       break;
 
     case "session.next.compaction.delta":
-      mutateMessages(machineId, event.properties.sessionID, (items) => {
+      mutateMessages(machineId, event.data.sessionID, (items) => {
         const index = findLastIndex(
           items,
           (item) => item.type === "compaction",
@@ -805,13 +815,13 @@ function applyEvent(
         if (compaction.type !== "compaction") return items;
         return replaceMessageAt(items, index, {
           ...compaction,
-          summary: `${compaction.summary}${event.properties.text}`,
+          summary: `${compaction.summary}${event.data.text}`,
         });
       });
       break;
 
     case "session.next.compaction.ended":
-      mutateMessages(machineId, event.properties.sessionID, (items) => {
+      mutateMessages(machineId, event.data.sessionID, (items) => {
         const index = findLastIndex(
           items,
           (item) => item.type === "compaction",
@@ -822,9 +832,9 @@ function applyEvent(
         if (compaction.type !== "compaction") return items;
         return replaceMessageAt(items, index, {
           ...compaction,
-          summary: event.properties.text,
-          ...(event.properties.include
-            ? { include: event.properties.include }
+          summary: event.data.text,
+          ...(event.data.include
+            ? { include: event.data.include }
             : {}),
         });
       });
@@ -832,51 +842,51 @@ function applyEvent(
 
     case "message.updated":
     case "message.part.updated":
-      revalidateMessagesNow(machineId, event.properties.sessionID);
+      revalidateMessagesNow(machineId, event.data.sessionID);
       break;
 
     case "message.part.delta":
-      revalidateMessagesSoon(machineId, event.properties.sessionID);
+      revalidateMessagesSoon(machineId, event.data.sessionID);
       break;
 
     case "message.removed":
     case "message.part.removed":
-      revalidateMessagesNow(machineId, event.properties.sessionID);
+      revalidateMessagesNow(machineId, event.data.sessionID);
       break;
 
     case "session.compacted":
-      revalidateMessages(machineId, event.properties.sessionID);
+      revalidateMessages(machineId, event.data.sessionID);
       break;
 
     case "session.error":
-      if (event.properties.sessionID) {
-        revalidateMessagesNow(machineId, event.properties.sessionID);
+      if (event.data.sessionID) {
+        revalidateMessagesNow(machineId, event.data.sessionID);
         void mutate(sessionStatusKey(machineId));
       }
       break;
 
     case "permission.asked":
       mutatePermissions(machineId, (items) =>
-        upsertById(items, event.properties),
+        upsertById(items, event.data),
       );
       break;
 
     case "permission.replied":
       mutatePermissions(machineId, (items) =>
-        removeById(items, event.properties.requestID),
+        removeById(items, event.data.requestID),
       );
       break;
 
     case "question.asked":
       mutateQuestions(machineId, (items) =>
-        upsertById(items, event.properties),
+        upsertById(items, event.data),
       );
       break;
 
     case "question.replied":
     case "question.rejected":
       mutateQuestions(machineId, (items) =>
-        removeById(items, event.properties.requestID),
+        removeById(items, event.data.requestID),
       );
       break;
 
@@ -921,7 +931,7 @@ export function useOpencodeEvents(machineId: string | null | undefined) {
       timerRef.current = window.setTimeout(flush, 16);
     };
 
-    const source = opencodeEvents(machineId, "/events");
+    const source = opencodeEvents(machineId, "/api/event");
 
     source.onmessage = (message) => {
       const event = parseEvent(message.data);
