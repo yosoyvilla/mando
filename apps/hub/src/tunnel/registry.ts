@@ -7,6 +7,15 @@ import type { Frame } from "@mando/protocol";
 export type Conn = {
   send(frame: Frame): void;
   onResponse(id: string, handler: (frame: Frame) => void): void;
+  // Removes a previously-registered onResponse handler without waiting for
+  // a terminal response_end/response_error frame. Task 2.7 shipped
+  // onResponse's own terminal-frame cleanup (see tunnel/ws.ts) but flagged
+  // that nothing let a caller release a handler early -- if the proxy
+  // (task 2.8) sends a `cancel` and the agent never replies with a
+  // terminal frame for that id, the entry would leak for the connection's
+  // lifetime. offResponse closes that gap; safe to call even if the
+  // handler was already removed (e.g. a terminal frame arrived first).
+  offResponse(id: string): void;
   close(): void;
 };
 

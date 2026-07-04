@@ -5,6 +5,7 @@ function fakeConn(): Conn {
   return {
     send() {},
     onResponse() {},
+    offResponse() {},
     close() {},
   };
 }
