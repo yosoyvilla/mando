@@ -4,8 +4,8 @@ const Schema = z.object({
   PORT: z.coerce.number().int().positive().default(8080),
   DATABASE_URL: z.string().min(1),
   COOKIE_SECRET: z.string().min(1),
-  PUBLIC_URL: z.string().url(),
-  MANDO_ADMIN_EMAIL: z.string().email().optional(),
+  PUBLIC_URL: z.url(),
+  MANDO_ADMIN_EMAIL: z.email().optional(),
   MANDO_ADMIN_PASSWORD: z.string().min(8).optional(),
 });
 
