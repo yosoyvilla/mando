@@ -1,0 +1,78 @@
+# -----------------------------------------------------------------------------
+# Scoped default-deny + explicit-allow NetworkPolicy for mando-hub pods only.
+# Because this selects app.kubernetes.io/name: mando-hub with both Ingress
+# and Egress in policyTypes, any traffic not matched by a rule below is
+# denied for these pods -- that IS the "default deny" behavior, applied at
+# workload scope rather than namespace scope (no other workloads in the
+# namespace are affected).
+#
+# What's covered and why:
+#   - Ingress: only from the ingress controller (via namespaceSelector +
+#     podSelector), on the container port. The namespaceSelector below
+#     assumes the common ingress-nginx convention of labeling its namespace
+#     "kubernetes.io/metadata.name: ingress-nginx" -- ADJUST to match your
+#     actual ingress controller's namespace/labels if different (e.g.
+#     Traefik, a managed cloud ingress, or a different ingress-nginx release
+#     namespace). Ingress from other pods in the cluster is intentionally
+#     NOT allowed.
+#   - Egress: DNS (to kube-dns in kube-system) is allowed explicitly since
+#     it's required for any outbound connection to resolve.
+#   - Egress to Postgres is deliberately left broad (all other egress
+#     allowed) rather than pinned to a CIDR/ipBlock: Postgres here is an
+#     external, deployment-specific managed instance (see
+#     deploy/docker-compose.yml's DATABASE_URL) whose real address is not
+#     known at manifest-authoring time and will vary per environment/cloud
+#     account. An ipBlock with a wrong or stale CIDR would be worse than no
+#     restriction -- it would silently break connectivity or, if it must be
+#     widened to make it work, provide no real security benefit while
+#     looking restrictive. If you know your Postgres instance's CIDR for a
+#     given environment, replace the broad egress rule below with a scoped
+#     ipBlock allow for port 5432 and remove the broad rule.
+# -----------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mando-hub
+  labels:
+    app.kubernetes.io/name: mando-hub
+    app.kubernetes.io/component: hub
+    app.kubernetes.io/version: "0.1.0"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: mando-hub
+      app.kubernetes.io/component: hub
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    # DNS resolution -- required for any outbound hostname lookup
+    # (Postgres host, etc.).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Everything else (Postgres and any other external dependency): see the
+    # rationale above for why this is broad rather than a pinned ipBlock.
+    # The cloud metadata endpoint (169.254.169.254, used by AWS/GCP/Azure to
+    # hand instance credentials to anything that can reach it) is carved out
+    # even from this broad allow -- the hub has no legitimate reason to call
+    # it, and leaving it reachable would let a compromised hub process (or a
+    # bug in a dependency) pull node/instance IAM credentials.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: ["169.254.169.254/32"]

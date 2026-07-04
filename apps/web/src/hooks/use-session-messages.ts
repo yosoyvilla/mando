@@ -20,9 +20,9 @@ import type {
   ToolFileContent,
   ToolTextContent,
 } from "@opencode-ai/sdk/v2";
-import { useInstanceStore } from "@/stores/instance-store";
+import { useMachineStore } from "@/stores/machine-store";
 import { getErrorMessage } from "@/lib/error-message";
-import { backendBasePath, type BackendProvider } from "@/lib/backend-url";
+import { opencodeJson } from "@/lib/opencode-fetch";
 
 export type {
   Message,
@@ -60,31 +60,21 @@ const EMPTY_TOKENS = {
   },
 };
 
-const fetcher = async (url: string): Promise<SessionMessage[]> => {
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error("Failed to fetch messages");
-  }
-  const data = await response.json();
+async function fetcher([machineId, path]: readonly [string, string]): Promise<SessionMessage[]> {
+  const data = await opencodeJson<unknown>(machineId, path);
   return normalizeFetchedMessages(data);
-};
+}
 
 function useBackend() {
-  const instance = useInstanceStore((s) => s.instance);
-  return instance
-    ? {
-        port: instance.port,
-        provider: instance.provider,
-        basePath: backendBasePath(instance.provider, instance.port),
-      }
-    : null;
+  const machineId = useMachineStore((s) => s.selectedMachineId);
+  return machineId ? { machineId } : null;
 }
 
 export function useSessionMessages(sessionId: string | undefined) {
   const backend = useBackend();
   const key =
     backend && sessionId
-      ? `${backend.basePath}/session/${sessionId}/messages`
+      ? ([backend.machineId, `/session/${sessionId}/messages`] as const)
       : null;
 
   const {
@@ -111,20 +101,12 @@ export function useSessionMessages(sessionId: string | undefined) {
   };
 }
 
-export function getMessagesKey(
-  port: number,
-  sessionId: string,
-  provider?: BackendProvider,
-) {
-  return `${backendBasePath(provider, port)}/session/${sessionId}/messages`;
+export function getMessagesKey(machineId: string, sessionId: string) {
+  return [machineId, `/session/${sessionId}/messages`] as const;
 }
 
-export function mutateSessionMessages(
-  port: number,
-  sessionId: string,
-  provider?: BackendProvider,
-) {
-  mutate(getMessagesKey(port, sessionId, provider));
+export function mutateSessionMessages(machineId: string, sessionId: string) {
+  mutate(getMessagesKey(machineId, sessionId));
 }
 
 export function sortSessionMessages(messages: SessionMessage[]) {
@@ -753,12 +735,11 @@ export function sessionMessagesToLegacy(
 }
 
 export function addOptimisticMessage(
-  port: number,
+  machineId: string,
   sessionId: string,
   message: MessageWithParts,
-  provider?: BackendProvider,
 ): () => void {
-  const key = getMessagesKey(port, sessionId, provider);
+  const key = getMessagesKey(machineId, sessionId);
   let previousMessages: SessionMessage[] = [];
   const optimisticMessage: SessionMessage = {
     id: message.info.id,
@@ -789,13 +770,12 @@ export function addOptimisticMessage(
 }
 
 export function reconcileOptimisticMessage(
-  port: number,
+  machineId: string,
   sessionId: string,
   optimisticId: string,
   actualMessage: SessionMessage,
-  provider?: BackendProvider,
 ) {
-  const key = getMessagesKey(port, sessionId, provider);
+  const key = getMessagesKey(machineId, sessionId);
 
   mutate(
     key,
@@ -817,12 +797,11 @@ export function reconcileOptimisticMessage(
 }
 
 export function settleOptimisticMessage(
-  port: number,
+  machineId: string,
   sessionId: string,
   messageId: string,
-  provider?: BackendProvider,
 ) {
-  const key = getMessagesKey(port, sessionId, provider);
+  const key = getMessagesKey(machineId, sessionId);
 
   mutate(
     key,
@@ -846,13 +825,12 @@ export function settleOptimisticMessage(
 }
 
 export function updateOptimisticMessage(
-  port: number,
+  machineId: string,
   sessionId: string,
   messageId: string,
   updates: Partial<MessageWithParts>,
-  provider?: BackendProvider,
 ) {
-  const key = getMessagesKey(port, sessionId, provider);
+  const key = getMessagesKey(machineId, sessionId);
 
   mutate(
     key,
@@ -880,12 +858,11 @@ export function updateOptimisticMessage(
 }
 
 export function removeOptimisticMessage(
-  port: number,
+  machineId: string,
   sessionId: string,
   messageId: string,
-  provider?: BackendProvider,
 ) {
-  const key = getMessagesKey(port, sessionId, provider);
+  const key = getMessagesKey(machineId, sessionId);
 
   mutate(
     key,
