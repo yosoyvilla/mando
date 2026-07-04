@@ -5,8 +5,9 @@ import { loadConfig } from "../../src/config";
 import { buildApp } from "../../src/app";
 import { createUser } from "../../src/users/repo";
 import { createSession } from "../../src/auth/session";
-import { getMachine } from "../../src/machines/repo";
+import { getMachine, findMachineByToken, revokeMachine } from "../../src/machines/repo";
 import { verifySecret } from "../../src/auth/password";
+import { approvePairing } from "../../src/pairing/service";
 
 const url = process.env.TEST_DATABASE_URL ?? "postgres://mando:mando@localhost:5433/mando";
 const sql = getDb(url);
@@ -27,6 +28,30 @@ function uniqueEmail(tag: string) {
 async function loginSessionCookie(userId: string) {
   const sessionId = await createSession(sql, userId);
   return `mando_sess=${sessionId}`;
+}
+
+// Runs a full request -> approve -> poll cycle over HTTP and returns the
+// minted machine id + plaintext token, so tests that only care about what
+// happens *after* pairing don't have to repeat the whole flow inline.
+async function pairAndApprove(app: ReturnType<typeof buildApp>, cookie: string, machineName: string) {
+  const requestRes = await app.request("/api/v1/pairing/request", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ machineName }),
+  });
+  const { code } = await requestRes.json();
+
+  const approveRes = await app.request("/api/v1/pairing/approve", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: cookie },
+    body: JSON.stringify({ code }),
+  });
+  const { machineId } = await approveRes.json();
+
+  const pollRes = await app.request(`/api/v1/pairing/status?code=${code}`);
+  const { token } = await pollRes.json();
+
+  return { code, machineId, token: token as string };
 }
 
 test("full lifecycle: request -> approve -> poll returns approved + token", async () => {
@@ -162,4 +187,65 @@ test("polling an unknown code returns 404", async () => {
 
   const res = await app.request("/api/v1/pairing/status?code=NOPE-NOPE");
   expect(res.status).toBe(404);
+});
+
+test("findMachineByToken resolves a paired machine's plaintext token and rejects garbage", async () => {
+  const app = buildApp({ sql, config });
+  const owner = await createUser(sql, uniqueEmail("find-by-token"), "correct-password");
+  const cookie = await loginSessionCookie(owner.id);
+
+  const { machineId, token } = await pairAndApprove(app, cookie, "find-by-token-machine");
+
+  const found = await findMachineByToken(sql, token);
+  expect(found).not.toBeNull();
+  expect(found!.id).toBe(machineId);
+
+  const notFound = await findMachineByToken(sql, "not-a-real-token");
+  expect(notFound).toBeNull();
+});
+
+test("revokeMachine invalidates the machine's token and marks it revoked", async () => {
+  const app = buildApp({ sql, config });
+  const owner = await createUser(sql, uniqueEmail("revoke-machine"), "correct-password");
+  const cookie = await loginSessionCookie(owner.id);
+
+  const { machineId, token } = await pairAndApprove(app, cookie, "revoke-machine-target");
+
+  // Sanity check: the token resolves before revocation.
+  expect(await findMachineByToken(sql, token)).not.toBeNull();
+
+  await revokeMachine(sql, machineId);
+
+  expect(await findMachineByToken(sql, token)).toBeNull();
+
+  const machine = await getMachine(sql, machineId);
+  expect(machine).not.toBeNull();
+  expect(machine!.revoked_at).not.toBeNull();
+});
+
+test("concurrent approvePairing calls for the same code: exactly one succeeds", async () => {
+  const app = buildApp({ sql, config });
+  const owner = await createUser(sql, uniqueEmail("pairing-race"), "correct-password");
+
+  const requestRes = await app.request("/api/v1/pairing/request", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ machineName: "race-machine" }),
+  });
+  const { code } = await requestRes.json();
+
+  const results = await Promise.allSettled([
+    approvePairing(sql, owner.id, code),
+    approvePairing(sql, owner.id, code),
+  ]);
+
+  const fulfilled = results.filter((r) => r.status === "fulfilled");
+  const rejected = results.filter((r) => r.status === "rejected");
+  expect(fulfilled.length).toBe(1);
+  expect(rejected.length).toBe(1);
+
+  // Only the winning approve's machine should exist -- the loser's
+  // transaction must have rolled back the machine/token it minted.
+  const machines = await sql`select id from machines where user_id = ${owner.id}`;
+  expect(machines.length).toBe(1);
 });

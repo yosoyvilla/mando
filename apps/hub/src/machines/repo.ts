@@ -3,9 +3,13 @@ import type { Machine } from "../auth/middleware";
 import { verifySecret } from "../auth/password";
 
 type Sql = ReturnType<typeof postgres>;
+// Accepts either a top-level connection or a transaction handle (the `tx`
+// passed into a sql.begin(...) callback) -- callers that need these queries
+// to participate in a larger transaction pass `tx` through here.
+type Executor = postgres.ISql;
 
 export async function createMachine(
-  sql: Sql,
+  sql: Executor,
   input: { userId: string; name: string; platform?: string | null },
 ): Promise<Machine> {
   const rows = await sql`
@@ -37,7 +41,7 @@ export async function revokeMachine(sql: Sql, id: string): Promise<void> {
 }
 
 export async function insertMachineToken(
-  sql: Sql,
+  sql: Executor,
   input: { machineId: string; tokenHash: string },
 ): Promise<void> {
   await sql`insert into machine_tokens (machine_id, token_hash) values (${input.machineId}, ${input.tokenHash})`;
