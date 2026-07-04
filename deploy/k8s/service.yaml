@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: mando-hub
+  labels:
+    app.kubernetes.io/name: mando-hub
+    app.kubernetes.io/component: hub
+    app.kubernetes.io/version: "0.1.0"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: mando-hub
+    app.kubernetes.io/component: hub
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+      protocol: TCP
+# WebSocket (/ws/agent) works fine over a plain ClusterIP Service/port --
+# Services proxy TCP and don't interfere with the HTTP Upgrade handshake.
+# The thing that DOES need explicit support is whatever sits in front of
+# this Service (Ingress controller, reverse proxy, load balancer): it must
+# forward the "Connection: Upgrade" / "Upgrade: websocket" headers and hold
+# the connection open for /ws/agent, or WebSocket clients will fail to
+# connect even though REST endpoints work fine. See ingress.example.yaml.
