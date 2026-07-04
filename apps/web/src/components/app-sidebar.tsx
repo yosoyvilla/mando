@@ -247,6 +247,7 @@ export default function AppSidebar(
               tooltip="New Session"
               onPress={handleNewSession}
               className="cursor-pointer gap-x-2"
+              data-testid="new-session"
             >
               <PlusIcon className="size-4 shrink-0" data-slot="icon" />
               <SidebarLabel>

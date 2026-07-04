@@ -65,7 +65,11 @@ describe("MachinePicker", () => {
 
     render(<MachinePicker client={client} onSelect={onSelect} />);
 
-    const button = await screen.findByRole("button", { name: /laptop/ });
+    // Anchored to the start: the card's own select button's accessible
+    // name starts with the machine name ("laptop Online Ready"), while the
+    // sibling "Revoke laptop" button's name merely contains it -- an
+    // unanchored /laptop/ would match both.
+    const button = await screen.findByRole("button", { name: /^laptop/ });
     fireEvent.click(button);
 
     expect(onSelect).toHaveBeenCalledTimes(1);
@@ -77,7 +81,7 @@ describe("MachinePicker", () => {
 
     render(<MachinePicker client={client} onSelect={() => {}} />);
 
-    const button = await screen.findByRole("button", { name: /desktop/ });
+    const button = await screen.findByRole("button", { name: /^desktop/ });
     expect(button).toBeDisabled();
   });
 
@@ -89,5 +93,35 @@ describe("MachinePicker", () => {
     await waitFor(() => {
       expect(screen.getByText(/No machines paired yet/)).toBeInTheDocument();
     });
+  });
+
+  it("hides a revoked machine instead of showing a permanently-offline card", async () => {
+    const client = stubClient([
+      machine({ id: "m1", name: "laptop", online: false, revokedAt: "2026-01-01T00:00:00.000Z" }),
+      machine({ id: "m2", name: "desktop", online: true }),
+    ]);
+
+    render(<MachinePicker client={client} onSelect={() => {}} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("desktop")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("laptop")).not.toBeInTheDocument();
+  });
+
+  it("revoking a machine calls HubClient.revokeMachine and refreshes the list", async () => {
+    const client = stubClient([machine({ id: "m1", name: "laptop", online: true })]);
+    client.revokeMachine = mock(() => Promise.resolve());
+
+    render(<MachinePicker client={client} onSelect={() => {}} />);
+
+    const revokeButton = await screen.findByRole("button", { name: "Revoke laptop" });
+    fireEvent.click(revokeButton);
+
+    await waitFor(() => {
+      expect(client.revokeMachine).toHaveBeenCalledWith("m1");
+    });
+    // load() re-runs after a successful revoke to pick up the new state.
+    expect(client.listMachines).toHaveBeenCalledTimes(2);
   });
 });

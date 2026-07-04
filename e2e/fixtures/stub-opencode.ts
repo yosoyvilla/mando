@@ -75,14 +75,41 @@ export async function startStubOpencode(): Promise<StubOpencode> {
     }
   }
 
+  function pushMessage(sessionId: string, message: StubMessage): void {
+    const list = messages.get(sessionId) ?? [];
+    list.push(message);
+    messages.set(sessionId, list);
+  }
+
   // Simulates a short assistant turn (step -> streamed text -> step end ->
   // idle) so a Playwright spec awaiting streamed output has something real
-  // to observe, without needing an actual model. Kept deliberately simple:
-  // one text delta, not token-by-token.
+  // to observe, without needing an actual model. The reply is split into
+  // two `text.delta` events separated by a short delay, rather than one
+  // delta carrying the whole reply -- task 8.2's session-drive spec needs
+  // to assert that a *partial* chunk renders before the full text does
+  // (content-based, not a wall-clock assertion: the test waits for the
+  // first chunk's exact substring, then for the full reply, and never
+  // asserts on timing itself). The delay is just what makes that first,
+  // partial DOM state observable instead of collapsing into the same
+  // 16ms client-side event batch as everything else (see
+  // apps/web/src/hooks/use-opencode-events.ts's `enqueue`/`flush`).
+  //
+  // Once the turn ends, the finished assistant message is also recorded
+  // in `messages` (in the same "modern" SessionMessage shape the SSE
+  // events describe -- see hooks/use-session-messages.ts's
+  // `normalizeFetchedMessages`, which accepts either that shape or a
+  // legacy `{info, parts}` one). Without this, `session.idle`'s own
+  // `revalidateMessagesNow` (a real behavior of the web app, not a test
+  // artifact) would GET /session/:id/messages a moment later and get back
+  // only the user message, wiping the assistant text the SSE deltas had
+  // just rendered.
   function simulateAssistantTurn(sessionId: string, promptText: string): void {
     const now = Date.now();
+    const messageId = crypto.randomUUID();
     const model = { id: "stub-model", providerID: "stub", variant: "default" };
-    const replyText = `stub reply to: ${promptText}`;
+    const firstChunk = "stub reply incoming -- ";
+    const secondChunk = `stub reply to: ${promptText}`;
+    const replyText = `${firstChunk}${secondChunk}`;
 
     broadcast({
       type: "session.next.step.started",
@@ -94,26 +121,45 @@ export async function startStubOpencode(): Promise<StubOpencode> {
     });
     broadcast({
       type: "session.next.text.delta",
-      properties: { timestamp: now, sessionID: sessionId, delta: replyText },
+      properties: { timestamp: now, sessionID: sessionId, delta: firstChunk },
     });
-    broadcast({
-      type: "session.next.text.ended",
-      properties: { timestamp: now, sessionID: sessionId, text: replyText },
-    });
-    broadcast({
-      type: "session.next.step.ended",
-      properties: {
-        timestamp: now,
-        sessionID: sessionId,
-        finish: "stop",
+
+    setTimeout(() => {
+      const later = Date.now();
+      broadcast({
+        type: "session.next.text.delta",
+        properties: { timestamp: later, sessionID: sessionId, delta: secondChunk },
+      });
+      broadcast({
+        type: "session.next.text.ended",
+        properties: { timestamp: later, sessionID: sessionId, text: replyText },
+      });
+      broadcast({
+        type: "session.next.step.ended",
+        properties: {
+          timestamp: later,
+          sessionID: sessionId,
+          finish: "stop",
+          cost: 0,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        },
+      });
+      pushMessage(sessionId, {
+        id: messageId,
+        type: "assistant",
+        agent: "build",
+        model,
+        content: [{ type: "text", text: replyText }],
+        time: { created: now, completed: later },
         cost: 0,
         tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-      },
-    });
-    broadcast({
-      type: "session.idle",
-      properties: { sessionID: sessionId },
-    });
+        finish: "stop",
+      });
+      broadcast({
+        type: "session.idle",
+        properties: { sessionID: sessionId },
+      });
+    }, 150);
   }
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -183,10 +229,7 @@ export async function startStubOpencode(): Promise<StubOpencode> {
         const messageId = body.messageID ?? crypto.randomUUID();
         const now = Date.now();
 
-        const userMessage: StubMessage = { id: messageId, type: "user", text: promptText, time: { created: now } };
-        const list = messages.get(sessionId) ?? [];
-        list.push(userMessage);
-        messages.set(sessionId, list);
+        pushMessage(sessionId, { id: messageId, type: "user", text: promptText, time: { created: now } });
 
         broadcast({
           type: "session.next.prompted",

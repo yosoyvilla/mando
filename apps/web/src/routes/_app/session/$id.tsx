@@ -729,6 +729,7 @@ const MessageItem = memo(function MessageItem({
               </Badge>
             )}
             <div
+              data-testid={isAssistant ? "assistant-message" : "user-message"}
               className={`prose prose-sm dark:prose-invert max-w-none overflow-x-hidden ${!isAssistant ? "text-muted-fg" : ""}`}
             >
               {textContent && (

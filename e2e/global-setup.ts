@@ -49,61 +49,28 @@
 //
 // What each spec sets up for itself (not this file's job): logging in,
 // selecting/creating a session, sending prompts -- see task 8.2.
-import { execFile as execFileCb, spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { promisify } from "node:util";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+import { spawn, type ChildProcess } from "node:child_process";
 import type { FullConfig } from "@playwright/test";
 import { getDb } from "../apps/hub/src/db/client";
 import { readPidFile } from "../packages/agent/src/daemon";
 import { startStubOpencode, type StubOpencode } from "./fixtures/stub-opencode";
+import { isMachineOnline, loginForCookie } from "./fixtures/hub-api";
+import { DB_URL, REPO_ROOT, seedMachineViaSubprocess } from "./fixtures/machine-lifecycle";
+import { runToCompletion, waitFor, waitForExit } from "./fixtures/proc-utils";
 import { ADMIN_EMAIL, ADMIN_PASSWORD, HUB_BASE_URL, HUB_PORT, MACHINE_NAME } from "./harness-config";
 
-const execFile = promisify(execFileCb);
-
-const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const DB_URL = process.env.TEST_DATABASE_URL ?? "postgres://mando:mando@localhost:5433/mando";
 const USING_CI_DATABASE = Boolean(process.env.TEST_DATABASE_URL);
-const SESSION_COOKIE_NAME = "mando_sess";
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function waitForExit(child: ChildProcess): Promise<number> {
-  return new Promise((resolve, reject) => {
-    child.once("error", reject);
-    child.once("exit", (code) => resolve(code ?? -1));
-  });
-}
-
-async function runToCompletion(cmd: string, args: string[], env?: NodeJS.ProcessEnv): Promise<void> {
-  const child = spawn(cmd, args, { cwd: REPO_ROOT, stdio: "inherit", env: env ?? process.env });
-  const code = await waitForExit(child);
-  if (code !== 0) throw new Error(`command failed (exit ${code}): ${cmd} ${args.join(" ")}`);
-}
-
-async function waitFor(check: () => Promise<boolean>, timeoutMs: number, label: string): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (await check().catch(() => false)) return;
-    await sleep(300);
-  }
-  throw new Error(`timed out waiting for: ${label}`);
-}
 
 async function ensurePostgres(): Promise<void> {
   if (!USING_CI_DATABASE) {
-    await runToCompletion("docker", [
-      "compose",
-      "-f",
-      join(REPO_ROOT, "deploy/docker-compose.yml"),
-      "up",
-      "-d",
-      "postgres",
-    ]);
+    await runToCompletion(
+      "docker",
+      ["compose", "-f", join(REPO_ROOT, "deploy/docker-compose.yml"), "up", "-d", "postgres"],
+      REPO_ROOT,
+    );
   }
 
   await waitFor(
@@ -116,10 +83,25 @@ async function ensurePostgres(): Promise<void> {
   );
 }
 
+// Postgres data is deliberately left running between local runs (see
+// "Teardown: what stops, what doesn't" below), but seedMachineViaSubprocess
+// always inserts a fresh row rather than reusing one -- flagged as a
+// follow-up in task-8.1-report.md ("DB growth across local runs"). Left
+// unaddressed, repeated local iteration accumulates same-named
+// "e2e-machine" rows, and once more than one exists, task 8.2's specs that
+// locate it by name (e.g. machines.spec.ts's online-badge assertion) hit a
+// Playwright strict-mode violation instead of a single match. Pruning the
+// harness's own previous rows before reseeding keeps exactly one around
+// per run without touching anything a spec created for itself (those use
+// randomized names, not MACHINE_NAME).
+async function pruneStaleHarnessMachine(): Promise<void> {
+  await getDb(DB_URL)`delete from machines where name = ${MACHINE_NAME}`;
+}
+
 async function ensureWebBuild(): Promise<void> {
   const indexHtml = join(REPO_ROOT, "apps/web/dist/index.html");
   if (existsSync(indexHtml)) return;
-  await runToCompletion("bun", ["run", "build", "--filter", "@mando/web"]);
+  await runToCompletion("bun", ["run", "build", "--filter", "@mando/web"], REPO_ROOT);
   if (!existsSync(indexHtml)) {
     throw new Error("apps/web/dist/index.html still missing after `bun run build --filter @mando/web`");
   }
@@ -153,49 +135,6 @@ async function waitForHubHealthy(): Promise<void> {
   );
 }
 
-function parseSessionCookie(setCookieHeader: string | null): string | null {
-  if (!setCookieHeader) return null;
-  const match = setCookieHeader.match(new RegExp(`${SESSION_COOKIE_NAME}=([^;]+)`));
-  return match ? `${SESSION_COOKIE_NAME}=${match[1]}` : null;
-}
-
-async function loginAsAdmin(): Promise<string> {
-  const res = await fetch(`${HUB_BASE_URL}/api/v1/auth/login`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ email: ADMIN_EMAIL, password: ADMIN_PASSWORD }),
-  });
-  if (!res.ok) throw new Error(`admin login failed with status ${res.status}`);
-  const cookie = parseSessionCookie(res.headers.get("set-cookie"));
-  if (!cookie) throw new Error("admin login succeeded but response carried no session cookie");
-  return cookie;
-}
-
-async function isSeededMachineOnline(cookie: string): Promise<boolean> {
-  const res = await fetch(`${HUB_BASE_URL}/api/v1/machines`, { headers: { cookie } });
-  if (!res.ok) return false;
-  const body = (await res.json()) as { machines: Array<{ name: string; online: boolean }> };
-  return body.machines.some((machine) => machine.name === MACHINE_NAME && machine.online);
-}
-
-interface SeededMachine {
-  machineId: string;
-  token: string;
-}
-
-// Runs scripts/seed-machine.bun.ts as a real `bun` subprocess (needed
-// because the seeding logic touches Bun.password.hash transitively -- see
-// this file's top-of-file "Node vs Bun" note) and parses its one-line JSON
-// stdout contract.
-async function seedMachineViaSubprocess(): Promise<SeededMachine> {
-  const { stdout } = await execFile(
-    "bun",
-    [join(REPO_ROOT, "e2e/scripts/seed-machine.bun.ts"), DB_URL, ADMIN_EMAIL, MACHINE_NAME],
-    { cwd: REPO_ROOT },
-  );
-  return JSON.parse(stdout.trim()) as SeededMachine;
-}
-
 // Seeds a machine/token owned by the bootstrapped admin, then runs a real
 // `mando connect --opencode-port <stub port>` against an isolated
 // MANDO_CONFIG. Because the config already has a token, connect() skips
@@ -203,7 +142,7 @@ async function seedMachineViaSubprocess(): Promise<SeededMachine> {
 // and just spawns the real detached daemon. Returns the pidfile path so
 // teardown can find and stop that daemon.
 async function bringMachineOnline(stubPort: number, tmpDir: string): Promise<{ pidFile: string }> {
-  const seeded = await seedMachineViaSubprocess();
+  const seeded = await seedMachineViaSubprocess(MACHINE_NAME, ADMIN_EMAIL);
 
   const configPath = join(tmpDir, "mando-config.json");
   const pidFile = join(tmpDir, "mando.pid");
@@ -217,6 +156,7 @@ async function bringMachineOnline(stubPort: number, tmpDir: string): Promise<{ p
   await runToCompletion(
     "bun",
     [join(REPO_ROOT, "packages/agent/src/index.ts"), "connect", "--opencode-port", String(stubPort)],
+    REPO_ROOT,
     {
       ...process.env,
       MANDO_CONFIG: configPath,
@@ -232,6 +172,7 @@ export default async function globalSetup(_config: FullConfig): Promise<() => Pr
   const tmpDir = mkdtempSync(join(tmpdir(), "mando-e2e-"));
 
   await ensurePostgres();
+  await pruneStaleHarnessMachine();
   await ensureWebBuild();
 
   const hubProcess = startHub();
@@ -242,9 +183,9 @@ export default async function globalSetup(_config: FullConfig): Promise<() => Pr
     stub = await startStubOpencode();
     const { pidFile } = await bringMachineOnline(stub.port, tmpDir);
 
-    const cookie = await loginAsAdmin();
+    const cookie = await loginForCookie(HUB_BASE_URL, ADMIN_EMAIL, ADMIN_PASSWORD);
     await waitFor(
-      () => isSeededMachineOnline(cookie),
+      () => isMachineOnline(HUB_BASE_URL, cookie, MACHINE_NAME),
       15_000,
       "seeded machine to report online to the hub",
     );
