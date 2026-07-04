@@ -213,4 +213,83 @@ describe("forward", () => {
     expect(sent).toHaveLength(1);
     expect(sent[0]).toMatchObject({ type: "response_error", id: "req-3", payload: { code: "fetch_failed" } });
   });
+
+  // SSRF guard: `path` comes from the hub, which is supposed to always send
+  // a leading-"/" path confined to this machine's own opencode server (see
+  // apps/hub/src/proxy/routes.ts). These tests prove forward() enforces
+  // that itself -- as defense in depth, independent of whatever the hub
+  // does -- rather than trusting the frame's `path` and string-concatenating
+  // it onto `localBase` for fetch(). A stub with a hit counter proves the
+  // rejected cases never reach the local server at all (so no request --
+  // and no Authorization header -- is ever sent to a non-local origin).
+  describe("SSRF guard", () => {
+    function stubWithHitCounter(): { localBase: string; hits: { count: number } } {
+      const hits = { count: 0 };
+      const localBase = startStub(() => {
+        hits.count += 1;
+        return new Response("ok", { status: 200 });
+      });
+      return { localBase, hits };
+    }
+
+    const maliciousPaths = ["@evil.com/x", "//evil.com/x", "http://evil.com", "not-even-a-path"];
+
+    for (const path of maliciousPaths) {
+      it(`rejects a path that would escape localBase's origin: ${JSON.stringify(path)}`, async () => {
+        const { localBase, hits } = stubWithHitCounter();
+        const frame = {
+          type: "http_request" as const,
+          id: "req-ssrf",
+          payload: { method: "GET", path, headers: {}, body: null },
+        };
+
+        const sent: Frame[] = [];
+        await forward(frame, localBase, (f) => sent.push(f), { opencodePassword: "secret" });
+
+        expect(sent).toHaveLength(1);
+        expect(sent[0]).toMatchObject({
+          type: "response_error",
+          id: "req-ssrf",
+          payload: { code: "fetch_failed", message: "invalid path" },
+        });
+        expect(hits.count).toBe(0);
+      });
+    }
+
+    it("still serves a normal '/'-prefixed path unaffected by the guard", async () => {
+      const { localBase, hits } = stubWithHitCounter();
+      const frame = {
+        type: "http_request" as const,
+        id: "req-ssrf-ok",
+        payload: { method: "GET", path: "/session", headers: {}, body: null },
+      };
+
+      const sent: Frame[] = [];
+      await forward(frame, localBase, (f) => sent.push(f));
+
+      expect(hits.count).toBe(1);
+      expect(sent[0]).toMatchObject({ type: "response_begin", id: "req-ssrf-ok", payload: { status: 200 } });
+      expect(sent[sent.length - 1]).toMatchObject({ type: "response_end", id: "req-ssrf-ok" });
+    });
+
+    it("fails closed (never follows) if the local opencode server itself responds with a redirect", async () => {
+      // Even a request that passed the origin check must not let the local
+      // server bounce it elsewhere -- a redirect to an attacker-controlled
+      // Location would otherwise carry the Authorization header set below
+      // right along with it.
+      const localBase = startStub(() => Response.redirect("http://evil.com/steal", 302));
+
+      const frame = {
+        type: "http_request" as const,
+        id: "req-redirect",
+        payload: { method: "GET", path: "/redirecting", headers: {}, body: null },
+      };
+
+      const sent: Frame[] = [];
+      await forward(frame, localBase, (f) => sent.push(f), { opencodePassword: "secret" });
+
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toMatchObject({ type: "response_error", id: "req-redirect", payload: { code: "fetch_failed" } });
+    });
+  });
 });

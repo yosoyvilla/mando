@@ -38,6 +38,22 @@ function filterResponseHeaders(raw: Record<string, string>): Record<string, stri
   return headers;
 }
 
+// Forces `X-Content-Type-Options: nosniff` onto every proxied response
+// before it reaches the browser, so content served from the hub's own
+// origin (agent/opencode responses, forwarded byte-for-byte) is never
+// MIME-sniffed into something the browser will execute -- e.g. a
+// text/plain response that looks like HTML/JS. Deletes any pre-existing
+// case-variant of the header first so the agent's own value (whatever it
+// may be) can never survive as a second, possibly conflicting value.
+function withNosniff(headers: Record<string, string>): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() !== "x-content-type-options") result[key] = value;
+  }
+  result["X-Content-Type-Options"] = "nosniff";
+  return result;
+}
+
 // proxyRequest sends one `http_request` frame over `conn` and turns the
 // agent's response_begin/response_chunk*/response_end (or response_error)
 // frames into a single streamed Response, so SSE-style bodies flow to the
@@ -127,7 +143,10 @@ export function proxyRequest(conn: Conn, init: ProxyRequestInit, config: ProxyRe
           // instead of resolving/erroring it.
           try {
             resolve(
-              new Response(stream, { status: frame.payload.status, headers: filterResponseHeaders(frame.payload.headers) }),
+              new Response(stream, {
+                status: frame.payload.status,
+                headers: withNosniff(filterResponseHeaders(frame.payload.headers)),
+              }),
             );
           } catch {
             // The stream above was never handed to a consumer in this

@@ -107,7 +107,7 @@ Available commands:
 
 ## The /mando command
 
-Running `mando install-command` writes a `/mando` slash command into opencode's commands directory (`~/.config/opencode/commands/mando.md`, or wherever `OPENCODE_CONFIG_DIR` points). Typing `/mando` inside an opencode session runs `mando connect --opencode-auto --json $ARGUMENTS` for you (`$ARGUMENTS` forwards anything typed after `/mando`), so pairing and connecting can be done without leaving the session: it prints a pairing code and a link the first time, and simply reports the connection status on later runs once the machine is already paired.
+Running `mando install-command` writes a `/mando` slash command into opencode's commands directory (`~/.config/opencode/commands/mando.md`, or wherever `OPENCODE_CONFIG_DIR` points). Typing `/mando` inside an opencode session runs `mando connect --opencode-auto --json` for you, so pairing and connecting can be done without leaving the session: it prints a pairing code and a link the first time, and simply reports the connection status on later runs once the machine is already paired. The command takes no arguments -- anything typed after `/mando` is ignored rather than substituted into the shell line, since opencode's `$ARGUMENTS` substitution is unescaped and `connect` has no positional arguments to receive it anyway.
 
 ## Configuration
 
