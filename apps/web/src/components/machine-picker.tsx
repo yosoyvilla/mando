@@ -3,7 +3,7 @@ import { hubClient as defaultHubClient } from "@/lib/hub-client-instance";
 import type { HubClient, Machine } from "@/lib/hub-client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ServerIcon } from "@/components/icons/lucide";
+import { ServerIcon, TrashIcon } from "@/components/icons/lucide";
 
 interface MachinePickerProps {
   client?: HubClient;
@@ -30,12 +30,22 @@ export function MachinePicker({
   onSelect,
 }: MachinePickerProps) {
   const [state, setState] = useState<PickerState>({ status: "loading" });
+  const [revokingId, setRevokingId] = useState<string | null>(null);
 
+  // A revoked machine's tunnel is already closed hub-side (see
+  // machines/routes.ts's POST /revoke) and it can never reconnect (its
+  // tokens are revoked too), so there's nothing left for a user to do with
+  // it here -- hide it rather than showing a permanently-offline card.
   const load = useCallback(() => {
     setState({ status: "loading" });
     client
       .listMachines()
-      .then((machines) => setState({ status: "ready", machines }))
+      .then((machines) =>
+        setState({
+          status: "ready",
+          machines: machines.filter((machine) => !machine.revokedAt),
+        }),
+      )
       .catch((err) =>
         setState({
           status: "error",
@@ -48,6 +58,17 @@ export function MachinePicker({
   useEffect(() => {
     load();
   }, [load]);
+
+  async function handleRevoke(machine: Machine) {
+    if (revokingId) return;
+    setRevokingId(machine.id);
+    try {
+      await client.revokeMachine(machine.id);
+      load();
+    } finally {
+      setRevokingId(null);
+    }
+  }
 
   if (state.status === "loading") {
     return (
@@ -100,14 +121,18 @@ export function MachinePicker({
         const label = statusLabel(machine);
 
         return (
-          <div key={machine.id} role="listitem" className="min-w-0">
+          <div
+            key={machine.id}
+            role="listitem"
+            className="min-w-0 overflow-hidden rounded-lg border border-border/40 bg-bg shadow-sm data-[selected=true]:border-primary"
+            data-selected={isSelected}
+          >
             <button
               type="button"
               aria-pressed={isSelected}
               disabled={!machine.online}
               onClick={() => onSelect(machine)}
-              className="group flex w-full min-w-0 flex-col overflow-hidden rounded-lg border border-border/40 bg-bg text-left shadow-sm outline-none transition-colors hover:border-border hover:bg-muted/5 focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 data-[selected=true]:border-primary"
-              data-selected={isSelected}
+              className="group flex w-full min-w-0 flex-col text-left outline-none transition-colors hover:bg-muted/5 focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <div className="flex min-w-0 items-center justify-between gap-2 px-3 py-2.5">
                 <span className="min-w-0 flex-1 truncate text-base font-medium tracking-tight text-fg">
@@ -129,6 +154,18 @@ export function MachinePicker({
                 </span>
               </div>
             </button>
+            <div className="flex justify-end border-t border-border/30 px-3 py-1.5">
+              <Button
+                size="xs"
+                intent="outline"
+                aria-label={`Revoke ${machine.name}`}
+                isDisabled={revokingId === machine.id}
+                onPress={() => handleRevoke(machine)}
+              >
+                <TrashIcon size="12px" />
+                {revokingId === machine.id ? "Revoking..." : "Revoke"}
+              </Button>
+            </div>
           </div>
         );
       })}

@@ -59,7 +59,15 @@ function ConnectedAppLayout() {
   useOpencodeEvents(selectedMachineId);
 
   if (!selectedMachineId) {
-    if (machines && machines.length > 0) return null;
+    // `machines` is `undefined` while the initial `useMachines()` fetch is
+    // still in flight -- on a fresh page load that's true for at least one
+    // render, before the auto-select effect above has anything to work
+    // with. Treat "still loading" the same as "has machines" (wait) rather
+    // than falling through to the empty-state redirect: otherwise every
+    // fresh load races this component's own auto-select effect and always
+    // loses, bouncing a user who *has* an online machine to /machines
+    // before that effect gets a chance to run.
+    if (!machines || machines.length > 0) return null;
     return <Navigate to="/machines" />;
   }
 

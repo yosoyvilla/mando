@@ -5,9 +5,13 @@
   "type": "module",
   "scripts": {
     "test": "playwright test",
-    "test:headed": "playwright test --headed"
+    "test:headed": "playwright test --headed",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "@playwright/test": "1.61.1"
+    "@playwright/test": "1.61.1",
+    "@types/bun": "^1.3.13",
+    "@types/node": "^22.10.2",
+    "typescript": "^6.0.3"
   }
 }
