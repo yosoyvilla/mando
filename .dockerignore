@@ -1,0 +1,40 @@
+# Build context is the repo root (deploy/docker-compose.yml uses context: ..).
+# Keep this in sync with .gitignore where it makes sense -- the goal here is
+# to keep the context small and force a fresh `bun install` + web build
+# inside the image rather than reusing anything built on the host.
+
+# Dependencies (reinstalled inside the image)
+node_modules
+**/node_modules
+
+# VCS / editor / tooling
+.git
+.github
+.vscode
+.idea
+.DS_Store
+
+# Project planning docs -- not needed at build/runtime
+.superpowers
+
+# Build outputs (rebuilt inside the image)
+**/dist
+**/build
+**/out
+**/.turbo
+**/.next
+**/.output
+
+# Test artifacts
+**/coverage
+**/test-results
+**/playwright-report
+
+# Env / secrets -- never bake these into an image layer
+.env
+.env.*
+*.pem
+.mando-pid
+
+# Logs
+**/*.log
