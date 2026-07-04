@@ -20,6 +20,11 @@ const Schema = z.object({
   MANDO_RATE_LIMIT_LOGIN_MAX: z.coerce.number().int().positive().optional(),
   MANDO_RATE_LIMIT_PAIRING_MAX: z.coerce.number().int().positive().optional(),
   MANDO_RATE_LIMIT_WS_AGENT_MAX: z.coerce.number().int().positive().optional(),
+  // How often index.ts re-runs retention.ts's runRetention() sweep after its
+  // initial startup pass. Defaults to hourly (retention.ts) when unset --
+  // this only lets an operator override the cadence, same pattern as the
+  // rate-limit maxes above.
+  MANDO_RETENTION_INTERVAL_MS: z.coerce.number().int().positive().optional(),
 });
 
 export type Config = {
@@ -32,6 +37,7 @@ export type Config = {
   rateLimitLoginMax?: number;
   rateLimitPairingMax?: number;
   rateLimitWsAgentMax?: number;
+  retentionIntervalMs?: number;
 };
 
 export function loadConfig(env: Record<string, string | undefined>): Config {
@@ -46,5 +52,6 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
     rateLimitLoginMax: p.MANDO_RATE_LIMIT_LOGIN_MAX,
     rateLimitPairingMax: p.MANDO_RATE_LIMIT_PAIRING_MAX,
     rateLimitWsAgentMax: p.MANDO_RATE_LIMIT_WS_AGENT_MAX,
+    retentionIntervalMs: p.MANDO_RETENTION_INTERVAL_MS,
   };
 }

@@ -29,3 +29,17 @@ export async function findUserById(sql: Sql, id: string): Promise<User | null> {
   const rows = await sql`select id, email, is_admin from users where id = ${id}`;
   return (rows[0] as User) ?? null;
 }
+
+// Hard-deletes the user row. machines/machine_tokens/user_sessions/
+// pairing_requests all FK to users with ON DELETE CASCADE (see
+// migrations/001_init.sql), so this one delete is what actually erases a
+// user's data for GDPR Art.17 / CCPA purposes -- callers (users/routes.ts)
+// are responsible for closing any live tunnels first, since a cascaded row
+// disappearing doesn't drop an already-open in-memory Registry connection.
+// Returns whether a row was actually deleted, so callers can 404 on a
+// nonexistent id instead of silently no-op'ing -- same `returning` +
+// row-count pattern as pairing/repo.ts's consumePairingRequest.
+export async function deleteUser(sql: Sql, userId: string): Promise<boolean> {
+  const rows = await sql`delete from users where id = ${userId} returning id`;
+  return rows.length > 0;
+}

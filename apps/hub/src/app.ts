@@ -11,6 +11,7 @@ import { proxyRoutes } from "./proxy/routes";
 import { Registry } from "./tunnel/registry";
 import { tunnelWsHandler, websocket } from "./tunnel/ws";
 import { createRateLimiter, DEFAULT_RATE_LIMITS, type RateLimitConfig } from "./middleware/rate-limit";
+import { auditRoutes } from "./audit";
 
 // Where the built web SPA (apps/web) lives. Its build is produced later
 // (Phase 5, Task 5.0) -- until then this directory won't exist, and every
@@ -87,10 +88,11 @@ export function buildApp(deps: AppDeps): Hono<{ Variables: AuthVariables }> {
   );
   app.use("/ws/agent", createRateLimiter(rateLimits.wsAgent ?? DEFAULT_RATE_LIMITS.wsAgent));
 
-  app.route("/", userRoutes(deps.sql));
+  app.route("/", userRoutes(deps.sql, registry));
   app.route("/", pairingRoutes(deps.sql));
   app.route("/", machineRoutes(deps.sql, registry));
   app.route("/", proxyRoutes(deps.sql, registry));
+  app.route("/", auditRoutes(deps.sql));
 
   app.get(
     "/ws/agent",
