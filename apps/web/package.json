@@ -4,7 +4,8 @@
   "scripts": {
     "build": "vite build",
     "dev": "bunx vite",
-    "preview": "bun ./.output/server/index.mjs"
+    "preview": "bun ./.output/server/index.mjs",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.111",
