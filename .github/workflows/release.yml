@@ -1,0 +1,70 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+# Deliberately scoped here rather than relying on the repo-global
+# `contents: read` in ci.yml -- this job needs to create a release, upload
+# assets to it, and push images to GHCR, none of which that default allows.
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+
+      - name: Install workspace dependencies
+        run: bun install
+
+      - name: Build agent binaries
+        # Bun cross-compiles all four targets from this single Linux
+        # runner -- no macOS matrix needed. Asset names are exact and
+        # depended on by install.sh's `mando-<os>-<arch>` lookup.
+        run: |
+          bun run --cwd packages/agent build.ts --target=bun-linux-x64 --outfile=dist/mando-linux-x64
+          bun run --cwd packages/agent build.ts --target=bun-linux-arm64 --outfile=dist/mando-linux-arm64
+          bun run --cwd packages/agent build.ts --target=bun-darwin-x64 --outfile=dist/mando-darwin-x64
+          bun run --cwd packages/agent build.ts --target=bun-darwin-arm64 --outfile=dist/mando-darwin-arm64
+        env:
+          MANDO_VERSION: ${{ github.ref_name }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push hub image
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          docker build -f deploy/Dockerfile \
+            -t "ghcr.io/yosoyvilla/mando-hub:${RELEASE_TAG}" \
+            -t ghcr.io/yosoyvilla/mando-hub:latest \
+            .
+          docker push "ghcr.io/yosoyvilla/mando-hub:${RELEASE_TAG}"
+          docker push ghcr.io/yosoyvilla/mando-hub:latest
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            packages/agent/dist/mando-linux-x64
+            packages/agent/dist/mando-linux-arm64
+            packages/agent/dist/mando-darwin-x64
+            packages/agent/dist/mando-darwin-arm64

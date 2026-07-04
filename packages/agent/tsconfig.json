@@ -12,6 +12,6 @@
     "isolatedModules": true,
     "types": ["bun"]
   },
-  "include": ["src/**/*", "test/**/*"],
+  "include": ["src/**/*", "test/**/*", "build.ts"],
   "exclude": ["node_modules", "dist"]
 }

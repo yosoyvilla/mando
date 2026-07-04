@@ -23,7 +23,7 @@ It is meant to be self-hosted. You run the server on a machine you control (your
 
 This gets a working setup running on a single machine in about five minutes: the server (called the "hub"), which hosts the web interface, and one machine connected to it. Here the hub and the machine are the same computer; see [Connecting a machine](#connecting-a-machine) for a hub on a different server.
 
-**Prerequisites:** Docker (with Compose) to run the hub; [Bun](https://bun.sh) and git on the machine you want to connect, plus write access to `/usr/local/bin` for the install step.
+**Prerequisites:** Docker (with Compose) to run the hub; on the machine you want to connect, either write access to `/usr/local/bin` (or `sudo`) for the one-line installer, or [Bun](https://bun.sh) and git if you'd rather build the agent from source.
 
 ### 1. Start the hub
 
@@ -42,12 +42,11 @@ The hub is now on `http://localhost:8080`. Open it in a browser and log in with 
 ### 2. Install the agent on the machine running opencode
 
 ```bash
-# in the cloned repository
-bun install
-bun run --cwd packages/agent build:binary   # produces packages/agent/dist/mando
-sudo cp packages/agent/dist/mando /usr/local/bin/mando
-mando install-command                        # registers the /mando command with opencode
+curl -fsSL https://raw.githubusercontent.com/yosoyvilla/mando/main/install.sh | sh
+mando install-command   # registers the /mando command with opencode
 ```
+
+See [Installing the agent](#installing-the-agent) for what the script does and how to build from source instead.
 
 ### 3. Connect and pair the machine
 
@@ -120,7 +119,19 @@ For the hub to be reachable remotely it must be deployed with a matching public 
 
 ## Installing the agent
 
-The agent is the `mando` command-line tool (source in `packages/agent`). Build it into a single self-contained binary:
+The agent is the `mando` command-line tool (source in `packages/agent`).
+
+### One-line install (recommended)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yosoyvilla/mando/main/install.sh | sh
+```
+
+This detects your OS and architecture, downloads the matching binary attached to the latest [GitHub release](https://github.com/yosoyvilla/mando/releases/latest), and installs it as `mando` — to `/usr/local/bin` if that's writable (using `sudo` if available), otherwise to `~/.local/bin` (in which case add that directory to your `PATH` if it isn't already). On macOS it also clears the Gatekeeper quarantine flag the download picks up, since the binary isn't Apple-notarized.
+
+### Build from source
+
+If you'd rather not run a downloaded script, or you're working on the agent itself, build it into a single self-contained binary:
 
 ```bash
 bun install
@@ -128,6 +139,8 @@ bun run --cwd packages/agent build:binary
 ```
 
 This produces `packages/agent/dist/mando`, a standalone executable that needs no separate runtime on the target machine. Copy it onto your `PATH` as `mando` (for example `/usr/local/bin/mando`) so both you and the `/mando` opencode command can call it by name.
+
+### Using the agent
 
 The agent stores its configuration — hub address, machine name, and pairing token — in `~/.mando.json`, created with owner-only permissions. It also writes a small pid file and a last-seen marker (`~/.mando-pid`, `~/.mando-state.json`) so `mando status` can report whether the background connection is alive.
 
@@ -137,8 +150,9 @@ Commands:
 |---|---|
 | `mando connect` | Pairs this machine with a hub (if not already paired) and starts the background process that keeps the tunnel open. Safe to run again; it detects an already-running connection instead of starting a second one. |
 | `mando disconnect` | Stops the background connection. |
-| `mando status` | Reports whether the machine is configured, paired, and currently connected, and when it was last seen. |
+| `mando status` | Reports whether the machine is configured, paired, and currently connected, and when it was last seen. Includes the agent's version. |
 | `mando install-command` | Writes the `/mando` command file into opencode's commands directory so it can be run from inside a session. |
+| `mando version` (or `mando --version`) | Prints the agent's release version. |
 
 Flags for `mando connect`:
 
@@ -201,6 +215,8 @@ Run the hub on a server you control, either with Docker Compose or on Kubernetes
 ### Docker Compose
 
 The included `deploy/docker-compose.yml` is a good starting point. For a server, set `PUBLIC_URL`, `COOKIE_SECRET`, `DATABASE_URL`, and the admin variables to real values (do not ship the development defaults), and put a TLS-terminating reverse proxy in front. The compose file binds its ports to `127.0.0.1` by default, which is what you want when a reverse proxy sits in front on the same host.
+
+Every tagged release also publishes the hub image to `ghcr.io/yosoyvilla/mando-hub` (tagged with the release version and `latest`). To use it instead of building locally, replace the `hub` service's `build:` line with `image: ghcr.io/yosoyvilla/mando-hub:latest` (or pin to a specific version tag).
 
 ### Kubernetes
 
