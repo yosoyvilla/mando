@@ -101,6 +101,72 @@ describe("forward", () => {
     expect(sent[0]).toMatchObject({ type: "response_begin", payload: { status: 201 } });
   });
 
+  it("aborts before response_begin: emits a cancelled response_error and nothing else", async () => {
+    const localBase = startStub(async () => {
+      await new Promise((r) => setTimeout(r, 300));
+      return new Response("too-late", { status: 200 });
+    });
+
+    const frame = {
+      type: "http_request" as const,
+      id: "req-abort-early",
+      payload: { method: "GET", path: "/slow-early", headers: {}, body: null },
+    };
+
+    const controller = new AbortController();
+    const sent: Frame[] = [];
+    const pending = forward(frame, localBase, (f) => sent.push(f), { signal: controller.signal });
+    controller.abort();
+    await pending;
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({
+      type: "response_error",
+      id: "req-abort-early",
+      payload: { code: "cancelled" },
+    });
+  });
+
+  it("aborts mid-stream: stops emitting chunks and ends with a cancelled response_error", async () => {
+    const localBase = startStub(() => {
+      const stream = new ReadableStream<Uint8Array>({
+        async start(controller) {
+          controller.enqueue(new TextEncoder().encode("chunk1\n"));
+          await new Promise((r) => setTimeout(r, 200));
+          // Never reached once the consumer aborts first -- proves forward
+          // stopped reading rather than draining the whole stream.
+          controller.enqueue(new TextEncoder().encode("chunk2\n"));
+          controller.close();
+        },
+      });
+      return new Response(stream, { status: 200, headers: { "content-type": "text/plain" } });
+    });
+
+    const frame = {
+      type: "http_request" as const,
+      id: "req-abort-mid",
+      payload: { method: "GET", path: "/slow-mid", headers: {}, body: null },
+    };
+
+    const controller = new AbortController();
+    const sent: Frame[] = [];
+    const pending = forward(frame, localBase, (f) => sent.push(f), { signal: controller.signal });
+
+    // Let response_begin (and likely chunk1) land, then abort well before
+    // the 200ms delay releases chunk2.
+    await new Promise((r) => setTimeout(r, 30));
+    controller.abort();
+    await pending;
+
+    expect(sent[0]).toMatchObject({ type: "response_begin", id: "req-abort-mid" });
+    expect(decodeChunks(sent)).not.toContain("chunk2");
+    expect(sent[sent.length - 1]).toMatchObject({
+      type: "response_error",
+      id: "req-abort-mid",
+      payload: { code: "cancelled" },
+    });
+  });
+
   it("emits response_error when the local fetch fails (connection refused)", async () => {
     // Start and immediately stop a server to get a port guaranteed to be
     // free/closed, so the fetch below fails with a connection error.
