@@ -12,9 +12,9 @@ import {
   useSessions,
   useCreateSession,
   useDeleteSession,
-  useInstances,
+  useMachines,
 } from "@/hooks/use-opencode";
-import { useInstanceStore, type Instance } from "@/stores/instance-store";
+import { useMachineStore } from "@/stores/machine-store";
 import {
   ChatBubbleLeftIcon,
   IconGridPlus,
@@ -22,34 +22,18 @@ import {
   IconThemeDark,
   IconThemeLight,
   IconThemeSystem,
+  ServerIcon,
   TrashIcon,
 } from "@/components/icons/lucide";
-import { ProviderIcon } from "@/components/icons/provider-icon";
 import { useTheme } from "@/providers/theme-provider";
 import { toast } from "@/components/ui/toast";
 import type { Session } from "@opencode-ai/sdk/v2";
-import type { BackendProvider } from "@/lib/backend-url";
+import type { Machine } from "@/lib/hub-client";
 
 function truncateTitle(title: string, maxLength = 40): string {
   if (title.length <= maxLength) return title;
   const halfLength = Math.floor((maxLength - 3) / 2);
   return `${title.slice(0, halfLength)}...${title.slice(-halfLength)}`;
-}
-
-interface InstanceData {
-  id: string;
-  name: string;
-  provider?: BackendProvider;
-  directory: string;
-  port: number;
-  hostname: string;
-  opencodePid?: number | null;
-  webPid?: number | null;
-  startedAt: string | null;
-  source?: "config" | "discovered";
-  version?: string | null;
-  state: "running";
-  status: string;
 }
 
 export default function Cmd() {
@@ -59,15 +43,15 @@ export default function Cmd() {
   const location = useLocation();
   const params = useParams({ strict: false });
   const { data: sessionsData, mutate } = useSessions();
-  const { data: instancesData } = useInstances();
+  const { data: machinesData } = useMachines();
   const createSession = useCreateSession();
   const deleteSession = useDeleteSession();
   const { setTheme } = useTheme();
-  const currentInstance = useInstanceStore((s) => s.instance);
-  const setInstance = useInstanceStore((s) => s.setInstance);
+  const selectedMachineId = useMachineStore((s) => s.selectedMachineId);
+  const setSelectedMachineId = useMachineStore((s) => s.setSelectedMachineId);
 
   const sessions: Session[] = sessionsData ?? [];
-  const instances: InstanceData[] = instancesData?.instances ?? [];
+  const machines: Machine[] = machinesData ?? [];
   const currentSessionId = params.id as string | undefined;
   const isOnSessionPage =
     location.pathname.startsWith("/session/") && currentSessionId;
@@ -119,15 +103,10 @@ export default function Cmd() {
     setIsOpen(false);
   }
 
-  function handleInstanceSelect(instance: InstanceData) {
-    const newInstance: Instance = {
-      id: instance.id,
-      name: instance.name,
-      port: instance.port,
-      provider: instance.provider ?? "opencode",
-    };
-    setInstance(newInstance);
-    toast.success(`Switched to ${instance.name}`);
+  function handleMachineSelect(machine: Machine) {
+    if (!machine.online) return;
+    setSelectedMachineId(machine.id);
+    toast.success(`Switched to ${machine.name}`);
     setIsOpen(false);
     navigate({ to: "/" });
   }
@@ -166,32 +145,29 @@ export default function Cmd() {
             </CommandMenuLabel>
           </CommandMenuItem>
           <CommandMenuItem
-            textValue="Manage instances"
+            textValue="Manage machines"
             onAction={() => {
               setIsOpen(false);
-              navigate({ to: "/instances" });
+              navigate({ to: "/machines" });
             }}
           >
             <IconManageInstances className="size-4 mr-2" />
-            <CommandMenuLabel>Manage Instances</CommandMenuLabel>
+            <CommandMenuLabel>Manage Machines</CommandMenuLabel>
           </CommandMenuItem>
         </CommandMenuSection>
 
-        {instances.length > 0 && (
-          <CommandMenuSection label="Switch Instance">
-            {instances.map((instance) => (
+        {machines.length > 0 && (
+          <CommandMenuSection label="Switch Machine">
+            {machines.map((machine) => (
               <CommandMenuItem
-                key={instance.id}
-                textValue={instance.name}
-                onAction={() => handleInstanceSelect(instance)}
+                key={machine.id}
+                textValue={machine.name}
+                isDisabled={!machine.online}
+                onAction={() => handleMachineSelect(machine)}
               >
-                <ProviderIcon
-                  provider={instance.provider}
-                  className="size-4 mr-2"
-                  aria-hidden="true"
-                />
-                <CommandMenuLabel>{instance.name}</CommandMenuLabel>
-                {currentInstance?.id === instance.id && (
+                <ServerIcon className="size-4 mr-2" aria-hidden="true" />
+                <CommandMenuLabel>{machine.name}</CommandMenuLabel>
+                {selectedMachineId === machine.id && (
                   <div className="absolute right-2 size-2 rounded-full bg-primary" />
                 )}
               </CommandMenuItem>

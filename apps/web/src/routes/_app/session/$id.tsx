@@ -25,7 +25,7 @@ import {
   SendIcon,
 } from "@/components/icons/lucide";
 import { useAgentStore } from "@/stores/agent-store";
-import { useInstanceStore } from "@/stores/instance-store";
+import { useMachineStore } from "@/stores/machine-store";
 import { useModelStore } from "@/stores/model-store";
 import { useBreadcrumb } from "@/contexts/breadcrumb-context";
 import {
@@ -47,6 +47,7 @@ import {
   useAgents,
   usePermissions,
   useQuestions,
+  useSelectedMachine,
   useSessionStatuses,
   useSessions,
 } from "@/hooks/use-opencode";
@@ -55,7 +56,7 @@ import {
   isValidUserSelectableAgent,
 } from "@/lib/agent-selection";
 import { getErrorMessage, getResponseErrorMessage } from "@/lib/error-message";
-import { backendBasePath, type BackendProvider } from "@/lib/backend-url";
+import { opencodeJson, opencodeRequest } from "@/lib/opencode-fetch";
 import type { Agent, Session, SessionMessage } from "@opencode-ai/sdk/v2";
 
 export const Route = createFileRoute("/_app/session/$id")({
@@ -346,8 +347,7 @@ function ChatErrorAlert({
 function QuestionAnswerForm({
   questions,
   partKey,
-  port,
-  provider,
+  machineId,
   sessionId,
   callID,
   pendingQuestions,
@@ -355,8 +355,7 @@ function QuestionAnswerForm({
 }: {
   questions: QuestionInfo[];
   partKey: string;
-  port: number;
-  provider?: BackendProvider;
+  machineId: string;
   sessionId: string;
   callID: string;
   pendingQuestions: QuestionRequest[];
@@ -389,15 +388,15 @@ function QuestionAnswerForm({
     setSubmitError(null);
 
     try {
-      const apiBase = backendBasePath(provider, port);
       let match =
         pendingQuestions.find((q) => q.tool?.callID === callID) ??
         pendingQuestions.find((q) => q.sessionID === sessionId);
 
       if (!match) {
-        const listRes = await fetch(`${apiBase}/questions`);
-        if (!listRes.ok) throw new Error("Failed to fetch pending questions");
-        const latestQuestions = (await listRes.json()) as QuestionRequest[];
+        const latestQuestions = await opencodeJson<QuestionRequest[]>(
+          machineId,
+          "/questions",
+        );
         match =
           latestQuestions.find((q) => q.tool?.callID === callID) ??
           latestQuestions.find((q) => q.sessionID === sessionId);
@@ -418,16 +417,13 @@ function QuestionAnswerForm({
         return [];
       });
 
-      const replyRes = await fetch(`${apiBase}/question/${match.id}/reply`, {
+      await opencodeJson(machineId, `/question/${match.id}/reply`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ answers }),
       });
 
-      if (!replyRes.ok) throw new Error("Failed to submit answers");
-
       onResolved(match.id);
-      mutateSessionMessages(port, sessionId, provider);
+      mutateSessionMessages(machineId, sessionId);
     } catch (err) {
       setSubmitError(
         err instanceof Error ? err.message : "Failed to submit answers",
@@ -534,13 +530,11 @@ function QuestionAnswerForm({
 
 function PermissionRequestForm({
   permission,
-  port,
-  provider,
+  machineId,
   onResolved,
 }: {
   permission: PermissionRequest;
-  port: number;
-  provider?: BackendProvider;
+  machineId: string;
   onResolved: (requestId: string) => void;
 }) {
   const [submitting, setSubmitting] = useState<PermissionReply | null>(null);
@@ -551,19 +545,10 @@ function PermissionRequestForm({
     setSubmitError(null);
 
     try {
-      const apiBase = backendBasePath(provider, port);
-      const response = await fetch(
-        `${apiBase}/permission/${permission.id}/reply`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ reply }),
-        },
-      );
-
-      if (!response.ok) {
-        throw new Error("Failed to reply to permission request");
-      }
+      await opencodeJson(machineId, `/permission/${permission.id}/reply`, {
+        method: "POST",
+        body: JSON.stringify({ reply }),
+      });
 
       onResolved(permission.id);
     } catch (err) {
@@ -622,15 +607,13 @@ function PermissionRequestForm({
 
 const ToolCallItem = memo(function ToolCallItem({
   part,
-  port,
-  provider,
+  machineId,
   sessionId,
   pendingQuestions,
   onQuestionResolved,
 }: {
   part: ToolPart;
-  port: number;
-  provider?: BackendProvider;
+  machineId: string;
   sessionId: string;
   pendingQuestions: QuestionRequest[];
   onQuestionResolved: (requestId: string) => void;
@@ -662,12 +645,11 @@ const ToolCallItem = memo(function ToolCallItem({
           {isPending && <span className="animate-pulse shrink-0">...</span>}
         </div>
 
-        {isPending && port ? (
+        {isPending && machineId ? (
           <QuestionAnswerForm
             questions={questions}
             partKey={part.callID || part.id}
-            port={port}
-            provider={provider}
+            machineId={machineId}
             sessionId={sessionId}
             callID={part.callID || ""}
             pendingQuestions={pendingQuestions}
@@ -707,8 +689,7 @@ const ToolCallItem = memo(function ToolCallItem({
 
 const MessageItem = memo(function MessageItem({
   message,
-  port,
-  provider,
+  machineId,
   sessionId,
   pendingPermissions,
   pendingQuestions,
@@ -716,8 +697,7 @@ const MessageItem = memo(function MessageItem({
   onQuestionResolved,
 }: {
   message: MessageWithParts;
-  port: number;
-  provider?: BackendProvider;
+  machineId: string;
   sessionId: string;
   pendingPermissions: PermissionRequest[];
   pendingQuestions: QuestionRequest[];
@@ -771,8 +751,7 @@ const MessageItem = memo(function MessageItem({
             <ToolCallItem
               key={part.callID || part.id}
               part={part}
-              port={port}
-              provider={provider}
+              machineId={machineId}
               sessionId={sessionId}
               pendingQuestions={pendingQuestions}
               onQuestionResolved={onQuestionResolved}
@@ -786,8 +765,7 @@ const MessageItem = memo(function MessageItem({
             <PermissionRequestForm
               key={permission.id}
               permission={permission}
-              port={port}
-              provider={provider}
+              machineId={machineId}
               onResolved={onPermissionResolved}
             />
           ))}
@@ -807,11 +785,12 @@ function hasVisibleContent(message: MessageWithParts): boolean {
 
 function SessionPage() {
   const { id: sessionId } = Route.useParams();
-  const instance = useInstanceStore((s) => s.instance);
-  const port = instance?.port ?? 0;
-  const provider = instance?.provider;
-  const supportsAgentSelection = provider === "opencode";
-  const apiBase = port ? backendBasePath(provider, port) : "";
+  const machineId = useMachineStore((s) => s.selectedMachineId) ?? "";
+  const selectedMachine = useSelectedMachine();
+  const machineOffline = selectedMachine ? !selectedMachine.online : false;
+  // The hub only proxies opencode machines (no claude/codex distinction),
+  // so agent selection is always supported once a machine is connected.
+  const supportsAgentSelection = true;
 
   const {
     messages,
@@ -916,11 +895,11 @@ function SessionPage() {
           (current ?? []).filter((permission) => permission.id !== requestId),
         { revalidate: false },
       );
-      if (port && sessionId) {
-        mutateSessionMessages(port, sessionId, provider);
+      if (machineId && sessionId) {
+        mutateSessionMessages(machineId, sessionId);
       }
     },
-    [port, provider, sessionId, mutatePermissions],
+    [machineId, sessionId, mutatePermissions],
   );
 
   const handleQuestionResolved = useCallback(
@@ -930,11 +909,11 @@ function SessionPage() {
           (current ?? []).filter((question) => question.id !== requestId),
         { revalidate: false },
       );
-      if (port && sessionId) {
-        mutateSessionMessages(port, sessionId, provider);
+      if (machineId && sessionId) {
+        mutateSessionMessages(machineId, sessionId);
       }
     },
-    [port, provider, sessionId, mutateQuestions],
+    [machineId, sessionId, mutateQuestions],
   );
 
   const visibleMessageIds = useMemo(
@@ -1002,7 +981,7 @@ function SessionPage() {
 
   const sendMessage = useCallback(
     async (messageText: string, messageId: string) => {
-      if (!sessionId || !port) return;
+      if (!sessionId || !machineId) return;
 
       try {
         let agentOverride: string | undefined;
@@ -1019,19 +998,22 @@ function SessionPage() {
               : undefined;
         }
 
-        const response = await fetch(`${apiBase}/session/${sessionId}/prompt`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            messageID: messageId,
-            text: messageText,
-            model:
-              selectedModel.providerID && selectedModel.modelID
-                ? selectedModel
-                : undefined,
-            agent: agentOverride,
-          }),
-        });
+        const response = await opencodeRequest(
+          machineId,
+          `/session/${sessionId}/prompt`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              messageID: messageId,
+              text: messageText,
+              model:
+                selectedModel.providerID && selectedModel.modelID
+                  ? selectedModel
+                  : undefined,
+              agent: agentOverride,
+            }),
+          },
+        );
 
         if (!response.ok) {
           const fallback = `Failed to send message (${response.status}${
@@ -1043,32 +1025,29 @@ function SessionPage() {
         const result = (await response.json()) as PromptSendResponse;
         if (result.message?.id) {
           reconcileOptimisticMessage(
-            port,
+            machineId,
             sessionId,
             messageId,
             result.message,
-            provider,
           );
         } else {
-          settleOptimisticMessage(port, sessionId, messageId, provider);
+          settleOptimisticMessage(machineId, sessionId, messageId);
         }
 
         isNearBottomRef.current = true;
-        mutateSessionMessages(port, sessionId, provider);
+        mutateSessionMessages(machineId, sessionId);
         mutateSessionStatuses();
         mutateSessions();
       } catch (err) {
         setSendError(
           err instanceof Error ? err.message : "Failed to send message",
         );
-        removeOptimisticMessage(port, sessionId, messageId, provider);
+        removeOptimisticMessage(machineId, sessionId, messageId);
       }
     },
     [
       sessionId,
-      port,
-      provider,
-      apiBase,
+      machineId,
       currentSession?.agent,
       agents,
       selectedAgent,
@@ -1085,7 +1064,8 @@ function SessionPage() {
     if (
       !messageText ||
       !sessionId ||
-      !port ||
+      !machineId ||
+      machineOffline ||
       sending ||
       submitLockRef.current
     ) {
@@ -1118,7 +1098,7 @@ function SessionPage() {
       ],
       isQueued: sending,
     };
-    addOptimisticMessage(port, sessionId, optimisticMessage, provider);
+    addOptimisticMessage(machineId, sessionId, optimisticMessage);
 
     void sendMessage(messageText, messageId).finally(() => {
       submitLockRef.current = false;
@@ -1132,20 +1112,33 @@ function SessionPage() {
   useEffect(() => {
     submitLockRef.current = false;
     setIsSubmitting(false);
-  }, [port, sessionId]);
+  }, [machineId, sessionId]);
 
   useEffect(() => {
-    if (!sending || !port || !sessionId) return;
+    if (!sending || !machineId || !sessionId) return;
 
     const interval = window.setInterval(() => {
-      mutateSessionMessages(port, sessionId, provider);
+      mutateSessionMessages(machineId, sessionId);
     }, 1500);
 
     return () => window.clearInterval(interval);
-  }, [port, provider, sending, sessionId]);
+  }, [machineId, sending, sessionId]);
 
   return (
     <div className="flex h-full flex-col -m-4">
+      {machineOffline && (
+        <div
+          role="status"
+          className="border-b border-warning/30 bg-warning/10 px-4 py-2 text-center text-sm text-warning"
+        >
+          {selectedMachine?.name ?? "This machine"} is offline. Run{" "}
+          <code className="rounded bg-warning/20 px-1 py-0.5 font-mono text-xs">
+            mando
+          </code>{" "}
+          on it to reconnect.
+        </div>
+      )}
+
       <div
         className="flex-1 overflow-auto overflow-x-hidden"
         ref={chatContainerRef}
@@ -1175,8 +1168,7 @@ function SessionPage() {
               <MessageItem
                 key={message.info.id}
                 message={message}
-                port={port}
-                provider={provider}
+                machineId={machineId}
                 sessionId={sessionId}
                 pendingPermissions={pendingPermissions}
                 pendingQuestions={pendingQuestions}
@@ -1190,8 +1182,7 @@ function SessionPage() {
                 <PermissionRequestForm
                   key={permission.id}
                   permission={permission}
-                  port={port}
-                  provider={provider}
+                  machineId={machineId}
                   onResolved={handlePermissionResolved}
                 />
               ))}
@@ -1294,7 +1285,7 @@ function SessionPage() {
             />
             <Button
               type="submit"
-              isDisabled={!input.trim() || sending}
+              isDisabled={!input.trim() || sending || machineOffline}
               isCircle
               size="sq-sm"
               aria-label={sending ? "Sending message" : "Send message"}

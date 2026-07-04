@@ -1,8 +1,8 @@
 import { DocumentIcon } from "@/components/icons/lucide";
 import { useEffect, useRef, useState } from "react";
 import useMediaQuery from "@/hooks/use-media-query";
-import { useInstanceStore } from "@/stores/instance-store";
-import { backendBasePath } from "@/lib/backend-url";
+import { useMachineStore } from "@/stores/machine-store";
+import { opencodeRequest } from "@/lib/opencode-fetch";
 
 interface FileResult {
   path: string;
@@ -124,9 +124,7 @@ export function FileMentionPopover({
   const listRef = useRef<HTMLDivElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
   const { isMobile } = useMediaQuery();
-  const instance = useInstanceStore((s) => s.instance);
-  const port = instance?.port;
-  const apiBase = port ? backendBasePath(instance?.provider, port) : "";
+  const machineId = useMachineStore((s) => s.selectedMachineId);
 
   useEffect(() => {
     if (isOpen && mentionStart !== null && textareaRef.current) {
@@ -152,7 +150,7 @@ export function FileMentionPopover({
   }, [isOpen, mentionStart, textareaRef]);
 
   useEffect(() => {
-    if (!isOpen || !searchQuery || !port) {
+    if (!isOpen || !searchQuery || !machineId) {
       setFiles([]);
       onFilesChange?.([]);
       return;
@@ -162,8 +160,9 @@ export function FileMentionPopover({
     const fetchFiles = async () => {
       setLoading(true);
       try {
-        const response = await fetch(
-          `${apiBase}/files/search?q=${encodeURIComponent(searchQuery)}`,
+        const response = await opencodeRequest(
+          machineId,
+          `/files/search?q=${encodeURIComponent(searchQuery)}`,
           { signal: controller.signal },
         );
         if (response.ok) {
@@ -190,7 +189,7 @@ export function FileMentionPopover({
       clearTimeout(debounceTimer);
       controller.abort();
     };
-  }, [isOpen, searchQuery, port, apiBase, onFilesChange]);
+  }, [isOpen, searchQuery, machineId, onFilesChange]);
 
   useEffect(() => {
     if (listRef.current && files.length > 0) {
