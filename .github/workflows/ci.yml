@@ -72,3 +72,77 @@ jobs:
             e2e/playwright-report
             e2e/test-results
           if-no-files-found: ignore
+
+  # Runs ONLY tests/real-opencode-handoff.spec.ts against a genuine
+  # `opencode serve`, wired through the real hub -> agent proxy path. The
+  # `test` job's default e2e suite talks to an in-process stub opencode
+  # server we wrote ourselves, so it can't catch the web UI calling an
+  # opencode API path that doesn't exist on the real server -- this job
+  # exists specifically to close that gap. Kept as its own job (rather than
+  # a step in `test`) so a real-opencode flake never blocks the fast
+  # unit/integration/stub-e2e signal.
+  e2e-real-opencode:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: mando
+          POSTGRES_PASSWORD: mando
+          POSTGRES_DB: mando
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mando -d mando"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+
+      - name: Install workspace dependencies
+        run: bun install
+
+      - name: Install e2e dependencies
+        working-directory: e2e
+        run: bun install
+
+      - name: Install Playwright browsers
+        working-directory: e2e
+        run: bunx playwright install --with-deps chromium
+
+      # Pinned to 1.17.13 to match the version documented in
+      # e2e/fixtures/real-opencode.ts, so this job's behavior stays
+      # reproducible instead of drifting with upstream releases. The
+      # official installer (https://opencode.ai/install) already detects
+      # GitHub Actions and appends its install dir to $GITHUB_PATH, so
+      # `opencode` is on PATH for every step after this one; MANDO_OPENCODE_BIN
+      # is set too as a belt-and-suspenders absolute-path fallback for the
+      # test step, matching the override real-opencode.ts already supports.
+      - name: Install opencode
+        run: |
+          curl -fsSL https://opencode.ai/install | bash -s -- --version 1.17.13
+          echo "MANDO_OPENCODE_BIN=$HOME/.opencode/bin/opencode" >> "$GITHUB_ENV"
+          "$HOME/.opencode/bin/opencode" --version
+
+      - name: Real opencode handoff test
+        working-directory: e2e
+        run: bunx playwright test --config playwright.real.config.ts
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-real-opencode
+          path: |
+            e2e/playwright-report
+            e2e/test-results
+          if-no-files-found: ignore
