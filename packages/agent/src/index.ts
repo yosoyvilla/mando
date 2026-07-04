@@ -8,26 +8,20 @@ export * from "./install-command";
 
 import { readConfig } from "./config";
 import { connect, printResult, type ConnectOpts, type ConnectResult } from "./connect";
-import { defaultPidFilePath, defaultStateFilePath, readPidFile, readStateFile, removePidFile } from "./daemon";
+import {
+  defaultPidFilePath,
+  defaultStateFilePath,
+  isProcessAlive,
+  readPidFile,
+  readStateFile,
+  removePidFile,
+} from "./daemon";
 import { installCommand } from "./install-command";
 
 export type DisconnectResult =
   | { status: "disconnected" }
   | { status: "not_running" }
   | { status: "error"; message: string };
-
-// True if a process with this pid exists and is signalable by us. Sending
-// signal 0 is the standard POSIX/Node idiom for a liveness check -- it
-// delivers no actual signal, just runs the permission/existence checks
-// `kill` would otherwise do.
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 // disconnect() reads the pidfile daemon.ts wrote (see connect.ts's
 // defaultSpawnDaemon) and signals that process to stop. SIGTERM (not

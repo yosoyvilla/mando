@@ -23,7 +23,6 @@ COPY apps/hub/package.json apps/hub/package.json
 COPY apps/web/package.json apps/web/package.json
 COPY packages/protocol/package.json packages/protocol/package.json
 COPY packages/agent/package.json packages/agent/package.json
-COPY packages/cli/package.json packages/cli/package.json
 COPY packages/opencode-plugin/package.json packages/opencode-plugin/package.json
 
 RUN bun install --frozen-lockfile
@@ -48,7 +47,6 @@ COPY apps/hub/package.json apps/hub/package.json
 COPY apps/web/package.json apps/web/package.json
 COPY packages/protocol/package.json packages/protocol/package.json
 COPY packages/agent/package.json packages/agent/package.json
-COPY packages/cli/package.json packages/cli/package.json
 COPY packages/opencode-plugin/package.json packages/opencode-plugin/package.json
 
 RUN bun install --frozen-lockfile --production

@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, beforeEach } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { connect } from "../../src/connect";
@@ -12,6 +12,10 @@ let logs: string[] = [];
 beforeEach(() => {
   configDir = mkdtempSync(join(tmpdir(), "mando-connect-test-"));
   process.env.MANDO_CONFIG = join(configDir, "config.json");
+  // connect() now also consults the pidfile (see the already-running-daemon
+  // guard) on every call -- pin it to a per-test tmp path so these tests
+  // never read/depend on a real ~/.mando-pid left over on the host.
+  process.env.MANDO_PID_FILE = join(configDir, "pid");
   logs = [];
   originalConsoleLog = console.log;
   console.log = (...args: unknown[]) => {
@@ -22,6 +26,7 @@ beforeEach(() => {
 afterEach(() => {
   console.log = originalConsoleLog;
   delete process.env.MANDO_CONFIG;
+  delete process.env.MANDO_PID_FILE;
   if (configDir) rmSync(configDir, { recursive: true, force: true });
   configDir = null;
 });
@@ -186,5 +191,60 @@ describe("connect (pairing flow)", () => {
     const result = await connect({ detectOpencodePort: async () => null, spawnDaemon: () => 1 });
     expect(result.status).toBe("error");
     if (result.status === "error") expect(result.message).toContain("opencode");
+  });
+
+  it("does not spawn a second daemon when one is already running, and reports it as connected instead", async () => {
+    const { writeConfig } = await import("../../src/config");
+    writeConfig({ hubUrl: "http://existing.invalid", token: "already-have-one", machineName: "known-machine" });
+
+    const fakeRunningPid = 424242;
+    const spawnCalls: number[] = [];
+    const opts = {
+      opencodePort: 4097,
+      spawnDaemon: (port: number) => {
+        spawnCalls.push(port);
+        // Mirrors what the real defaultSpawnDaemon does: write the pidfile
+        // synchronously right after spawning, before connect() returns.
+        writeFileSync(process.env.MANDO_PID_FILE!, String(fakeRunningPid), "utf-8");
+        return fakeRunningPid;
+      },
+      isProcessAlive: (pid: number) => pid === fakeRunningPid,
+    };
+
+    const first = await connect(opts);
+    expect(first).toEqual({ status: "connected", machine: "known-machine", uiUrl: "http://existing.invalid" });
+    expect(spawnCalls).toEqual([4097]);
+
+    // Second call: the pidfile from the first call is still there and
+    // isProcessAlive says it's live -- must report "already running"
+    // rather than calling spawnDaemon again.
+    const second = await connect(opts);
+    expect(second).toEqual({
+      status: "connected",
+      machine: "known-machine",
+      uiUrl: "http://existing.invalid",
+      alreadyRunning: true,
+    });
+    expect(spawnCalls).toEqual([4097]); // still only the one spawn call from the first connect()
+  });
+
+  it("spawns again when the pidfile is stale (its pid is no longer alive)", async () => {
+    const { writeConfig } = await import("../../src/config");
+    writeConfig({ hubUrl: "http://existing.invalid", token: "already-have-one", machineName: "known-machine" });
+
+    writeFileSync(process.env.MANDO_PID_FILE!, "999999", "utf-8");
+
+    const spawnCalls: number[] = [];
+    const result = await connect({
+      opencodePort: 4097,
+      spawnDaemon: (port: number) => {
+        spawnCalls.push(port);
+        return 555;
+      },
+      isProcessAlive: () => false, // stale pidfile -- the recorded pid is dead
+    });
+
+    expect(result).toEqual({ status: "connected", machine: "known-machine", uiUrl: "http://existing.invalid" });
+    expect(spawnCalls).toEqual([4097]);
   });
 });
