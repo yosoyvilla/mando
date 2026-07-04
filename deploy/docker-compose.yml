@@ -1,0 +1,24 @@
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: mando
+      POSTGRES_PASSWORD: mando
+      POSTGRES_DB: mando
+    ports: ["5432:5432"]
+    volumes: ["mando_pg:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mando"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  hub:
+    build: { context: .., dockerfile: deploy/Dockerfile }
+    environment:
+      DATABASE_URL: postgres://mando:mando@postgres:5432/mando
+      COOKIE_SECRET: change-me
+      PUBLIC_URL: http://localhost:8080
+    ports: ["8080:8080"]
+    depends_on:
+      postgres: { condition: service_healthy }
+volumes: { mando_pg: {} }
