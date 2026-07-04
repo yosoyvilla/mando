@@ -4,6 +4,9 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 env:
   TEST_DATABASE_URL: postgres://mando:mando@localhost:5432/mando
 
