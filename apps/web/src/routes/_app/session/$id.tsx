@@ -31,7 +31,6 @@ import { useBreadcrumb } from "@/contexts/breadcrumb-context";
 import {
   useSessionMessages,
   addOptimisticMessage,
-  reconcileOptimisticMessage,
   settleOptimisticMessage,
   removeOptimisticMessage,
   mutateSessionMessages,
@@ -57,21 +56,13 @@ import {
 } from "@/lib/agent-selection";
 import { getErrorMessage, getResponseErrorMessage } from "@/lib/error-message";
 import { opencodeJson, opencodeRequest } from "@/lib/opencode-fetch";
-import type { Agent, Session, SessionMessage } from "@opencode-ai/sdk/v2";
+import type { Agent, Session } from "@opencode-ai/sdk/v2";
 
 export const Route = createFileRoute("/_app/session/$id")({
   component: SessionPage,
 });
 
 type PermissionReply = "once" | "always" | "reject";
-
-interface PromptSendResponse {
-  accepted: boolean;
-  duplicate?: boolean;
-  mode?: "v2" | "legacy";
-  message?: SessionMessage;
-  messageID?: string;
-}
 
 function isValidSessionAgent(agents: Agent[], name?: string) {
   return isValidUserSelectableAgent(agents, name);
@@ -270,7 +261,7 @@ function QuestionDisplay({
             <div className="flex items-center gap-2 text-[11px] uppercase tracking-wide text-muted-fg">
               {q.header && <span>{q.header}</span>}
               {q.multiple && (
-                <span className="rounded border border-warning/50 bg-warning/10 px-1.5 py-0.5 text-[10px] font-medium text-warning">
+                <span className="rounded border border-warning/50 bg-warning/10 px-1.5 py-0.5 text-[10px] font-medium text-warning-subtle-fg">
                   Multi-select
                 </span>
               )}
@@ -395,7 +386,7 @@ function QuestionAnswerForm({
       if (!match) {
         const latestQuestions = await opencodeJson<QuestionRequest[]>(
           machineId,
-          "/questions",
+          "/question",
         );
         match =
           latestQuestions.find((q) => q.tool?.callID === callID) ??
@@ -451,7 +442,7 @@ function QuestionAnswerForm({
               <div className="flex items-center gap-2 text-[11px] uppercase tracking-wide text-muted-fg">
                 {q.header && <span>{q.header}</span>}
                 {q.multiple && (
-                  <span className="rounded border border-warning/50 bg-warning/10 px-1.5 py-0.5 text-[10px] font-medium text-warning">
+                  <span className="rounded border border-warning/50 bg-warning/10 px-1.5 py-0.5 text-[10px] font-medium text-warning-subtle-fg">
                     Multi-select
                   </span>
                 )}
@@ -985,6 +976,45 @@ function SessionPage() {
       if (!sessionId || !machineId) return;
 
       try {
+        // Real opencode's `POST /api/session/:id/prompt` body only accepts
+        // `{ id?, prompt: { text, files?, agents? }, delivery?, resume? }`
+        // -- there is no `model`/`agent` field on that request (confirmed
+        // via /doc's OpenAPI schema, additionalProperties:false). Switching
+        // model/agent for a session are their own endpoints; call them
+        // first, only when the desired value actually differs from the
+        // session's current one.
+        if (
+          selectedModel.providerID &&
+          selectedModel.modelID &&
+          (currentSession?.model?.id !== selectedModel.modelID ||
+            currentSession?.model?.providerID !== selectedModel.providerID)
+        ) {
+          const modelResponse = await opencodeRequest(
+            machineId,
+            `/api/session/${sessionId}/model`,
+            {
+              method: "POST",
+              body: JSON.stringify({
+                model: {
+                  id: selectedModel.modelID,
+                  providerID: selectedModel.providerID,
+                  ...(selectedModel.variant
+                    ? { variant: selectedModel.variant }
+                    : {}),
+                },
+              }),
+            },
+          );
+          if (!modelResponse.ok) {
+            throw new Error(
+              await getResponseErrorMessage(
+                modelResponse,
+                `Failed to switch model (${modelResponse.status})`,
+              ),
+            );
+          }
+        }
+
         let agentOverride: string | undefined;
         if (supportsAgentSelection) {
           const defaultAgent = isValidSessionAgent(
@@ -999,19 +1029,33 @@ function SessionPage() {
               : undefined;
         }
 
+        if (agentOverride && agentOverride !== currentSession?.agent) {
+          const agentResponse = await opencodeRequest(
+            machineId,
+            `/api/session/${sessionId}/agent`,
+            {
+              method: "POST",
+              body: JSON.stringify({ agent: agentOverride }),
+            },
+          );
+          if (!agentResponse.ok) {
+            throw new Error(
+              await getResponseErrorMessage(
+                agentResponse,
+                `Failed to switch agent (${agentResponse.status})`,
+              ),
+            );
+          }
+        }
+
         const response = await opencodeRequest(
           machineId,
-          `/session/${sessionId}/prompt`,
+          `/api/session/${sessionId}/prompt`,
           {
             method: "POST",
             body: JSON.stringify({
-              messageID: messageId,
-              text: messageText,
-              model:
-                selectedModel.providerID && selectedModel.modelID
-                  ? selectedModel
-                  : undefined,
-              agent: agentOverride,
+              id: messageId,
+              prompt: { text: messageText },
             }),
           },
         );
@@ -1023,17 +1067,13 @@ function SessionPage() {
           throw new Error(await getResponseErrorMessage(response, fallback));
         }
 
-        const result = (await response.json()) as PromptSendResponse;
-        if (result.message?.id) {
-          reconcileOptimisticMessage(
-            machineId,
-            sessionId,
-            messageId,
-            result.message,
-          );
-        } else {
-          settleOptimisticMessage(machineId, sessionId, messageId);
-        }
+        // `SessionInputAdmitted` (the real response's `data`) doesn't carry
+        // a fully-formed message -- the assistant turn arrives later via
+        // SSE. Since `messageId` (our own client-generated id, `^msg_...`)
+        // was sent as the request's `id` and already backs the optimistic
+        // user message, no reconciliation swap is needed; just clear its
+        // pending state.
+        settleOptimisticMessage(machineId, sessionId, messageId);
 
         isNearBottomRef.current = true;
         mutateSessionMessages(machineId, sessionId);
@@ -1050,6 +1090,7 @@ function SessionPage() {
       sessionId,
       machineId,
       currentSession?.agent,
+      currentSession?.model,
       agents,
       selectedAgent,
       supportsAgentSelection,
@@ -1130,9 +1171,12 @@ function SessionPage() {
       {machineOffline && (
         <div
           role="status"
-          className="border-b border-warning/30 bg-warning/10 px-4 py-2 text-center text-sm text-warning"
+          className="border-b border-warning/30 bg-warning/10 px-4 py-2 text-center text-sm text-warning-subtle-fg"
         >
-          {selectedMachine?.name ?? "This machine"} is offline. Run{" "}
+          <span className="font-mono">
+            {selectedMachine?.name ?? "This machine"}
+          </span>{" "}
+          is offline. Run{" "}
           <code className="rounded bg-warning/20 px-1 py-0.5 font-mono text-xs">
             mando
           </code>{" "}
@@ -1145,8 +1189,22 @@ function SessionPage() {
         ref={chatContainerRef}
       >
         {loading && (
-          <div className="flex items-center justify-center py-8">
-            <Loader className="size-6" />
+          <div
+            role="status"
+            aria-label="Loading messages"
+            className="space-y-4 p-6"
+          >
+            <span className="sr-only">Loading messages…</span>
+            {[0, 1, 2].map((i) => (
+              <div
+                key={i}
+                aria-hidden="true"
+                className={`space-y-2 ${i % 2 === 1 ? "ml-auto max-w-[70%]" : "max-w-[70%]"}`}
+              >
+                <div className="h-3 w-16 rounded motion-safe:animate-pulse bg-muted" />
+                <div className="h-14 w-full rounded-lg motion-safe:animate-pulse bg-muted" />
+              </div>
+            ))}
           </div>
         )}
 

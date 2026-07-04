@@ -43,7 +43,9 @@ export function LoginView({ onSuccess }: LoginViewProps) {
         className="w-full max-w-sm space-y-4"
       >
         <div className="space-y-1 text-center">
-          <h1 className="text-2xl font-semibold text-fg">Mando</h1>
+          <h1 className="font-mono text-2xl font-semibold tracking-tight text-fg">
+            mando
+          </h1>
           <p className="text-sm text-muted-fg">
             Sign in to manage your paired machines.
           </p>

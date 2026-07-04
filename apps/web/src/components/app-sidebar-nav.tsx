@@ -146,7 +146,7 @@ export function AppSidebarNav() {
       <span className="flex items-center gap-x-4">
         <SidebarTrigger className="-ml-2" />
         <Breadcrumbs className="hidden md:flex">
-          <BreadcrumbsItem href="/">
+          <BreadcrumbsItem href="/" className="font-mono">
             {selectedMachine?.name ?? "Machine"}
           </BreadcrumbsItem>
           {pageTitle && <BreadcrumbsItem>{pageTitle}</BreadcrumbsItem>}

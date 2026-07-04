@@ -67,6 +67,12 @@ test.describe("mobile responsiveness", () => {
     await drawer.getByRole("link", { name: "Diff" }).click();
     await expect(page).toHaveURL(/\/diff/);
     await expect(drawer).not.toBeVisible();
+    // The Diff view fetches `/vcs/diff/raw` (see use-opencode.ts's
+    // `useGitDiff`) -- assert it actually loads (heading renders, no error
+    // state) rather than just checking the URL, so a regression back to a
+    // non-existent endpoint or a response-shape mismatch fails here too.
+    await expect(page.getByRole("heading", { name: "Git Diff" })).toBeVisible();
+    await expect(page.getByText("Error loading diff")).toHaveCount(0);
     await assertNoHorizontalOverflow(page);
   });
 

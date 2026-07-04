@@ -22,8 +22,12 @@ export const buttonStyles = tv({
   ],
   variants: {
     intent: {
+      // Derived from --color-primary (the app's one brand accent, indigo)
+      // rather than a hardcoded hex, so it automatically follows the
+      // light/dark indigo shades in main.css instead of staying a fixed
+      // near-black in both themes.
       primary:
-        "[--btn-fill-start:#201E25] [--btn-fill-end:#323137] [--btn-fill-hover-start:#292730] [--btn-fill-hover-end:#3A3940] [--btn-fill-active-start:#1A181F] [--btn-fill-active-end:#2B2A30] [--btn-stroke-start:#4B4951] [--btn-stroke-end:#313036] [--btn-shadow-ring:#0D0D0D] [--btn-fg:#F4F4F5] [--btn-icon:#F4F4F5]/70 [--btn-icon-active:#F4F4F5]",
+        "[--btn-fill-start:color-mix(in_oklab,var(--color-primary)_94%,white_6%)] [--btn-fill-end:color-mix(in_oklab,var(--color-primary)_84%,black_16%)] [--btn-fill-hover-start:color-mix(in_oklab,var(--color-primary)_98%,white_2%)] [--btn-fill-hover-end:color-mix(in_oklab,var(--color-primary)_76%,black_24%)] [--btn-fill-active-start:color-mix(in_oklab,var(--color-primary)_86%,black_14%)] [--btn-fill-active-end:color-mix(in_oklab,var(--color-primary)_70%,black_30%)] [--btn-stroke-start:color-mix(in_oklab,var(--color-primary)_75%,white_25%)] [--btn-stroke-end:color-mix(in_oklab,var(--color-primary)_62%,black_38%)] [--btn-shadow-ring:color-mix(in_oklab,var(--color-primary)_45%,black_55%)] [--btn-fg:var(--color-primary-fg)] [--btn-icon:var(--color-primary-fg)]/70 [--btn-icon-active:var(--color-primary-fg)]",
       secondary:
         "[--btn-fill-start:color-mix(in_oklab,var(--color-secondary)_96%,var(--color-bg)_4%)] [--btn-fill-end:color-mix(in_oklab,var(--color-secondary)_86%,var(--color-fg)_14%)] [--btn-fill-hover-start:color-mix(in_oklab,var(--color-secondary)_90%,var(--color-fg)_10%)] [--btn-fill-hover-end:color-mix(in_oklab,var(--color-secondary)_78%,var(--color-fg)_22%)] [--btn-fill-active-start:color-mix(in_oklab,var(--color-secondary)_78%,var(--color-fg)_22%)] [--btn-fill-active-end:color-mix(in_oklab,var(--color-secondary)_70%,var(--color-fg)_30%)] [--btn-stroke-start:color-mix(in_oklab,var(--color-secondary)_60%,var(--color-fg)_40%)] [--btn-stroke-end:color-mix(in_oklab,var(--color-secondary)_78%,var(--color-fg)_22%)] [--btn-shadow-ring:color-mix(in_oklab,var(--color-fg)_16%,transparent)] [--btn-fg:var(--color-secondary-fg)] [--btn-icon:var(--color-muted-fg)] [--btn-icon-active:var(--color-secondary-fg)]",
       warning:

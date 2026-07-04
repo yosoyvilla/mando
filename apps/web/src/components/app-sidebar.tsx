@@ -13,6 +13,8 @@ import {
 import { useEffect, useState, useMemo } from "react";
 import { parsePatchFiles } from "@pierre/diffs";
 import { Avatar } from "@/components/ui/avatar";
+import { StatusDot } from "@/components/status-dot";
+import { ThemeSwitcher } from "@/components/theme-switcher";
 import {
   ComboBox,
   ComboBoxContent,
@@ -130,15 +132,15 @@ function MachineSwitcher() {
               textValue={item.name}
               isDisabled={!item.online}
             >
-              <ServerIcon data-slot="icon" className="size-4" />
-              <ComboBoxLabel className="min-w-0 truncate">
+              <StatusDot online={item.online} className="shrink-0" />
+              <ComboBoxLabel className="min-w-0 truncate font-mono">
                 {item.name}
               </ComboBoxLabel>
               <ComboBoxDescription className="flex min-w-0 items-center gap-2 text-xs">
                 {item.platform && (
-                  <span className="truncate">{item.platform}</span>
+                  <span className="truncate font-mono">{item.platform}</span>
                 )}
-                <span className="shrink-0">
+                <span className="shrink-0 font-mono">
                   {item.online ? "Online" : "Offline"}
                 </span>
               </ComboBoxDescription>
@@ -245,8 +247,8 @@ export default function AppSidebar(
       <SidebarHeader>
         <UILink href="/" className="flex items-center gap-x-2">
           <img src="/logo.svg" alt="OpenCode Mando" className="size-6" />
-          <SidebarLabel className="font-medium">
-            OpenCode <span className="text-muted-fg">Mando</span>
+          <SidebarLabel className="font-mono font-medium tracking-tight">
+            opencode <span className="text-muted-fg">mando</span>
           </SidebarLabel>
         </UILink>
       </SidebarHeader>
@@ -318,58 +320,61 @@ export default function AppSidebar(
         </SidebarSectionGroup>
       </SidebarContent>
 
-      <SidebarFooter className="flex flex-row justify-between gap-4 group-data-[state=collapsed]:flex-col">
-        <Menu>
-          <MenuTrigger
-            className="flex w-full items-center justify-between"
-            aria-label="Profile"
-          >
-            <div className="flex items-center gap-x-2">
-              <Avatar
-                className="size-8 *:size-8 group-data-[state=collapsed]:size-6 group-data-[state=collapsed]:*:size-6"
-                isSquare
-                initials={identityLabel.slice(0, 2).toUpperCase()}
-              />
-              <div className="in-data-[collapsible=dock]:hidden text-sm">
-                <SidebarLabel>{identityLabel}</SidebarLabel>
+      <SidebarFooter className="flex flex-row items-center justify-between gap-2 group-data-[state=collapsed]:flex-col">
+        <div className="min-w-0 flex-1">
+          <Menu>
+            <MenuTrigger
+              className="flex w-full items-center justify-between"
+              aria-label="Profile"
+            >
+              <div className="flex items-center gap-x-2">
+                <Avatar
+                  className="size-8 *:size-8 group-data-[state=collapsed]:size-6 group-data-[state=collapsed]:*:size-6"
+                  isSquare
+                  initials={identityLabel.slice(0, 2).toUpperCase()}
+                />
+                <div className="in-data-[collapsible=dock]:hidden text-sm">
+                  <SidebarLabel>{identityLabel}</SidebarLabel>
+                </div>
               </div>
-            </div>
-            <ChevronUpDownIcon data-slot="chevron" />
-          </MenuTrigger>
-          <MenuContent
-            className="in-data-[sidebar-collapsible=collapsed]:min-w-56 min-w-(--trigger-width)"
-            placement="bottom right"
-          >
-            <MenuSection>
-              <MenuHeader separator>
-                <span className="block">{identityLabel}</span>
-                {selectedMachine && (
-                  <span className="block text-muted-fg text-xs">
-                    {selectedMachine.name}
-                  </span>
-                )}
-              </MenuHeader>
-            </MenuSection>
+              <ChevronUpDownIcon data-slot="chevron" />
+            </MenuTrigger>
+            <MenuContent
+              className="in-data-[sidebar-collapsible=collapsed]:min-w-56 min-w-(--trigger-width)"
+              placement="bottom right"
+            >
+              <MenuSection>
+                <MenuHeader separator>
+                  <span className="block">{identityLabel}</span>
+                  {selectedMachine && (
+                    <span className="block font-mono text-muted-fg text-xs">
+                      {selectedMachine.name}
+                    </span>
+                  )}
+                </MenuHeader>
+              </MenuSection>
 
-            <MenuItem href="#dashboard">
-              <HomeIcon />
-              Dashboard
-            </MenuItem>
-            <MenuItem href="/settings">
-              <Cog6ToothIcon />
-              Settings
-            </MenuItem>
-            <MenuItem href="#security">
-              <ShieldCheckIcon />
-              Security
-            </MenuItem>
-            <MenuSeparator />
-            <MenuItem onAction={handleLogout}>
-              <ArrowRightStartOnRectangleIcon />
-              Log out
-            </MenuItem>
-          </MenuContent>
-        </Menu>
+              <MenuItem href="#dashboard">
+                <HomeIcon />
+                Dashboard
+              </MenuItem>
+              <MenuItem href="/settings">
+                <Cog6ToothIcon />
+                Settings
+              </MenuItem>
+              <MenuItem href="#security">
+                <ShieldCheckIcon />
+                Security
+              </MenuItem>
+              <MenuSeparator />
+              <MenuItem onAction={handleLogout}>
+                <ArrowRightStartOnRectangleIcon />
+                Log out
+              </MenuItem>
+            </MenuContent>
+          </Menu>
+        </div>
+        <ThemeSwitcher />
       </SidebarFooter>
       <SidebarRail />
     </Sidebar>
