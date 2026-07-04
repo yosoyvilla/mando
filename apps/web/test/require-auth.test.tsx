@@ -1,7 +1,15 @@
 import { describe, it, expect, mock } from "bun:test";
 import { render, screen, waitFor } from "@testing-library/react";
+import {
+  createRootRoute,
+  createRoute,
+  createRouter,
+  createMemoryHistory,
+  RouterProvider,
+} from "@tanstack/react-router";
 import { AuthProvider } from "../src/contexts/auth-context";
 import { useAuth } from "../src/contexts/auth-context";
+import { RequireAuth } from "../src/components/require-auth";
 import type { HubClient, HubUser } from "../src/lib/hub-client";
 
 function stubClient(me: () => Promise<HubUser | null>): HubClient {
@@ -72,5 +80,74 @@ describe("AuthProvider gating", () => {
     await waitFor(() =>
       expect(screen.getByText("Login")).toBeInTheDocument(),
     );
+  });
+});
+
+// Builds a minimal two-route tree (a protected route + `/login`) so
+// RequireAuth's real <Navigate> can be exercised end to end, including its
+// `useLocation()` call which needs an actual router context.
+function buildTestRouter(initialPath: string) {
+  const rootRoute = createRootRoute();
+  const protectedRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/pair",
+    component: () => (
+      <RequireAuth>
+        <div>Protected content</div>
+      </RequireAuth>
+    ),
+  });
+  const loginRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/login",
+    validateSearch: (search: Record<string, unknown>) => ({
+      redirect: typeof search.redirect === "string" ? search.redirect : undefined,
+    }),
+    component: () => <div>Login page</div>,
+  });
+  const routeTree = rootRoute.addChildren([protectedRoute, loginRoute]);
+
+  return createRouter({
+    routeTree,
+    history: createMemoryHistory({ initialEntries: [initialPath] }),
+  });
+}
+
+describe("RequireAuth", () => {
+  it("redirects unauthenticated users to /login, preserving the original path+search as ?redirect=", async () => {
+    const client = stubClient(() => Promise.resolve(null));
+    const router = buildTestRouter("/pair?code=ABCD-1234");
+
+    render(
+      <AuthProvider client={client}>
+        <RouterProvider router={router} />
+      </AuthProvider>,
+    );
+
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe("/login"),
+    );
+    expect(router.state.location.search).toEqual({
+      redirect: "/pair?code=ABCD-1234",
+    });
+    expect(screen.getByText("Login page")).toBeInTheDocument();
+  });
+
+  it("lets authenticated users reach the protected route without redirecting", async () => {
+    const client = stubClient(() =>
+      Promise.resolve({ id: "u1", email: "a@b.com" }),
+    );
+    const router = buildTestRouter("/pair?code=ABCD-1234");
+
+    render(
+      <AuthProvider client={client}>
+        <RouterProvider router={router} />
+      </AuthProvider>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText("Protected content")).toBeInTheDocument(),
+    );
+    expect(router.state.location.pathname).toBe("/pair");
   });
 });
