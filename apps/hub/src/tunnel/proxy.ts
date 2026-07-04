@@ -18,6 +18,24 @@ export type ProxyRequestConfig = {
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 
+// Headers that must never be forwarded verbatim from the agent's response
+// back to the browser: `content-length` was computed against the agent's
+// local body encoding and no longer matches once bytes are re-chunked
+// through this stream, and a stale/incorrect value can make Bun/undici
+// truncate or hang the browser's read of the body; `transfer-encoding` and
+// `connection` are hop-by-hop framing headers for the agent<->hub leg, not
+// the hub<->browser leg. Mirrors the request-side stripping in
+// proxy/routes.ts's EXCLUDED_HEADERS.
+const EXCLUDED_RESPONSE_HEADERS = new Set(["content-length", "transfer-encoding", "connection"]);
+
+function filterResponseHeaders(raw: Record<string, string>): Record<string, string> {
+  const headers: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (!EXCLUDED_RESPONSE_HEADERS.has(key.toLowerCase())) headers[key] = value;
+  }
+  return headers;
+}
+
 // proxyRequest sends one `http_request` frame over `conn` and turns the
 // agent's response_begin/response_chunk*/response_end (or response_error)
 // frames into a single streamed Response, so SSE-style bodies flow to the
@@ -98,7 +116,7 @@ export function proxyRequest(conn: Conn, init: ProxyRequestInit, config: ProxyRe
             },
           });
 
-          resolve(new Response(stream, { status: frame.payload.status, headers: frame.payload.headers }));
+          resolve(new Response(stream, { status: frame.payload.status, headers: filterResponseHeaders(frame.payload.headers) }));
           return;
         }
         case "response_chunk": {

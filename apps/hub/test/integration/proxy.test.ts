@@ -293,6 +293,39 @@ test(
 );
 
 test(
+  "a different authenticated user's request to someone else's machine returns 404 and never reaches the agent",
+  async () => {
+    const registry = new Registry();
+    const server = await startTestServer({ sql, config, registry });
+    const { machineId, agentWs } = await setUpOnlineMachine(server, "cross-tenant-owner");
+    const { cookie: otherCookie } = await registerAndLogin(server, "cross-tenant-other");
+
+    const res = await fetch(`${server.url}/api/v1/machines/${machineId}/opencode/ping`, {
+      headers: { Cookie: otherCookie },
+    });
+    // requireMachineOwnership folds "not yours" and "doesn't exist" into
+    // the same 404 (pre-existing behavior, mirrored by
+    // machines-routes.test.ts) -- a cross-tenant caller must not be able
+    // to distinguish the two.
+    expect(res.status).toBe(404);
+
+    // The request must be rejected by requireUser/requireMachineOwnership
+    // before proxyRequest ever runs, so the owner's agent should never see
+    // an http_request frame for this path. A short timeout is fine here:
+    // this asserts absence, not timing -- if the frame were going to
+    // arrive it would do so almost immediately (no network hop beyond the
+    // local test WebSocket).
+    await expect(
+      waitForFrame(agentWs, (f) => f.type === "http_request" && f.payload.path === "/ping", 300),
+    ).rejects.toThrow(/timed out waiting/);
+
+    agentWs.close();
+    server.stop();
+  },
+  FRAME_WAIT_MS,
+);
+
+test(
   "offline machine returns 503 machine_offline",
   async () => {
     const registry = new Registry();

@@ -212,16 +212,15 @@ test("findMachineByToken resolves a paired machine's plaintext token and rejects
 test("findMachineByToken rejects a malformed token without throwing", async () => {
   // Has a dot, but the id half isn't a valid uuid -- the where-clause's
   // implicit uuid cast would throw in postgres if this weren't caught.
-  // No `await` here: `.resolves.toBeNull()` is typed `void` (not a
-  // Promise) in bun:test, and bun's test runner already tracks/awaits
-  // pending `expect(...).resolves`/`.rejects` assertions itself before
-  // deciding pass/fail, so an explicit await has no effect either way
-  // (verified: an unawaited failing `.resolves` assertion still fails
-  // the test).
-  expect(findMachineByToken(sql, "not-a-uuid.some-secret")).resolves.toBeNull();
+  // bun's test runner already tracks pending `expect(...).resolves`
+  // assertions itself before deciding pass/fail, so this would still fail
+  // correctly even unawaited -- but awaiting keeps the assertion ordered
+  // with the rest of the test body and avoids relying on that runner
+  // behavior.
+  await expect(findMachineByToken(sql, "not-a-uuid.some-secret")).resolves.toBeNull();
 
   // A dot with nothing after it (empty secret half) is also malformed.
-  expect(findMachineByToken(sql, "00000000-0000-0000-0000-000000000000.")).resolves.toBeNull();
+  await expect(findMachineByToken(sql, "00000000-0000-0000-0000-000000000000.")).resolves.toBeNull();
 });
 
 test("revokeMachine invalidates the machine's token and marks it revoked", async () => {
