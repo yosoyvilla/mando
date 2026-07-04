@@ -102,15 +102,27 @@ export async function startRealOpencode(): Promise<RealOpencode> {
   });
 
   try {
-    // 90s (not 30s): a cold CI runner's first `opencode serve` is far slower
+    // 120s (not 30s): a cold CI runner's first `opencode serve` is far slower
     // to bind /doc than a warm local machine's.
+    //
+    // The per-request AbortSignal.timeout is load-bearing, not decoration:
+    // opencode has been observed to bind its port ("listening") while /doc
+    // stalls the connection for minutes. Node's fetch has no default timeout,
+    // and waitFor only re-checks its deadline BETWEEN iterations -- so a
+    // single hung probe blocks past the 120s budget entirely (a real CI run
+    // failed 5 minutes after "listening"). Bounding each probe to 5s makes a
+    // stalled connection abort and lets waitFor poll again within its
+    // deadline. This mirrors the agent's own checkHealth (see
+    // packages/agent/src/opencode.ts), which guards its /doc probe the same
+    // way. Body is drained so repeated probes don't leak sockets.
     await waitFor(
       async () => {
         if (spawnError) throw spawnError;
-        const res = await fetch(`http://127.0.0.1:${port}/doc`);
+        const res = await fetch(`http://127.0.0.1:${port}/doc`, { signal: AbortSignal.timeout(5_000) });
+        await res.body?.cancel();
         return res.ok;
       },
-      90_000,
+      120_000,
       `real opencode (${bin}) GET /doc on port ${port}`,
     );
   } catch (error) {
