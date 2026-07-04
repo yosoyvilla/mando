@@ -66,6 +66,20 @@ async function pruneStaleMachine(): Promise<void> {
   await getDb(DB_URL)`delete from machines where name = ${REAL_MACHINE_NAME}`;
 }
 
+// Mirror of global-setup.ts's ensureWebBuild: the hub serves the SPA from
+// apps/web/dist, and the browser handoff test needs it. On a fresh CI
+// checkout dist doesn't exist yet (the API-only tests don't need it, but
+// the browser one does -- getByLabel("Email") timed out otherwise). No-op
+// locally where dist is already built.
+async function ensureWebBuild(): Promise<void> {
+  const indexHtml = join(REPO_ROOT, "apps/web/dist/index.html");
+  if (existsSync(indexHtml)) return;
+  await runToCompletion("bun", ["run", "build", "--filter", "@mando/web"], REPO_ROOT);
+  if (!existsSync(indexHtml)) {
+    throw new Error("apps/web/dist/index.html still missing after `bun run build --filter @mando/web`");
+  }
+}
+
 function startHub(): ChildProcess {
   return spawn("bun", [join(REPO_ROOT, "apps/hub/src/index.ts")], {
     cwd: REPO_ROOT,
@@ -138,6 +152,7 @@ export default async function globalSetup(_config: FullConfig): Promise<() => Pr
   const tmpDir = mkdtempSync(join(tmpdir(), "mando-e2e-real-"));
 
   await ensurePostgres();
+  await ensureWebBuild();
 
   // Start the hub first: its startup path runs the DB migrations, so the
   // `machines` table exists before pruneStaleMachine() touches it. On a
