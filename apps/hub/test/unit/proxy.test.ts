@@ -64,6 +64,40 @@ test("assembles response_begin + response_chunk* + response_end into a streamed 
   expect(await res.text()).toBe("pong");
 });
 
+test("strips hop-by-hop/length headers from the agent's response before forwarding to the browser", async () => {
+  const { conn, sent, deliver } = fakeConn();
+
+  const resPromise = proxyRequest(conn, { method: "GET", path: "/ping", headers: {}, body: null });
+  const id = requestId(sent);
+
+  // A stale content-length (computed against the agent's own body, not
+  // this stream's re-chunked bytes) or hop-by-hop connection/framing
+  // headers must never reach the browser -- see the module comment above
+  // filterResponseHeaders in proxy.ts.
+  deliver({
+    type: "response_begin",
+    id,
+    payload: {
+      status: 200,
+      headers: {
+        "content-type": "text/plain",
+        "Content-Length": "999",
+        "transfer-encoding": "chunked",
+        connection: "keep-alive",
+      },
+    },
+  });
+  const res = await resPromise;
+
+  expect(res.headers.get("content-type")).toBe("text/plain");
+  expect(res.headers.has("content-length")).toBe(false);
+  expect(res.headers.has("transfer-encoding")).toBe(false);
+  expect(res.headers.has("connection")).toBe(false);
+
+  deliver({ type: "response_end", id, payload: {} });
+  await res.text();
+});
+
 test("a response_error before response_begin resolves as a 502, never as a hung promise", async () => {
   const { conn, sent, deliver } = fakeConn();
 
