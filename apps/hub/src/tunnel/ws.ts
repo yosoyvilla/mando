@@ -2,7 +2,7 @@ import { createBunWebSocket } from "hono/bun";
 import type postgres from "postgres";
 import { parseFrame, serializeFrame, type Frame } from "@mando/protocol";
 import { findMachineByToken } from "../machines/repo";
-import { Registry, type Conn } from "./registry";
+import type { Registry, Conn } from "./registry";
 
 type Sql = ReturnType<typeof postgres>;
 
@@ -45,6 +45,13 @@ export function tunnelWsHandler(deps: TunnelWsDeps) {
     let helloTimer: ReturnType<typeof setTimeout> | null = null;
     let pingTimer: ReturnType<typeof setInterval> | null = null;
     let unansweredPings = 0;
+    // Guards against a second `hello` frame arriving while the first is
+    // still awaiting findMachineByToken -- until that await resolves,
+    // machineId is still null, so onMessage's `!machineId` check alone
+    // would let a second hello call handleHello again and overwrite
+    // pingTimer, leaking the first interval. Set synchronously (before
+    // any await) so a re-entrant call sees it immediately.
+    let helloInProgress = false;
     // Response frames (response_begin/chunk/end/error) are routed back to
     // whoever is waiting on that request id -- task 2.8's proxy registers
     // these via Conn.onResponse. Terminal frames clean up their own entry.
@@ -69,6 +76,14 @@ export function tunnelWsHandler(deps: TunnelWsDeps) {
       frame: Extract<Frame, { type: "hello" }>,
       ws: { send(data: string): void; close(code?: number, reason?: string): void },
     ): Promise<void> {
+      if (helloInProgress) {
+        // A duplicate hello while the first is still being verified --
+        // ignore it rather than double-registering and leaking a second
+        // ping interval.
+        return;
+      }
+      helloInProgress = true;
+
       if (helloTimer) {
         clearTimeout(helloTimer);
         helloTimer = null;
@@ -112,7 +127,7 @@ export function tunnelWsHandler(deps: TunnelWsDeps) {
       }, pingIntervalMs);
     }
 
-    async function handleStatus(frame: Extract<Frame, { type: "status" }>): Promise<void> {
+    async function handleStatus(): Promise<void> {
       if (!machineId) return;
       // No machines-repo helper for this exists yet, and there is no
       // health column in migrations/001_init.sql to persist
@@ -157,7 +172,7 @@ export function tunnelWsHandler(deps: TunnelWsDeps) {
             unansweredPings = 0;
             return;
           case "status":
-            void handleStatus(frame);
+            void handleStatus();
             return;
           case "response_begin":
           case "response_chunk":
