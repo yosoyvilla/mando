@@ -72,6 +72,7 @@ test("login with good password sets mando_sess cookie and GET /api/v1/me returns
   expect(setCookieHeader).toContain("Secure");
   expect(setCookieHeader).toContain("SameSite=Lax");
   expect(setCookieHeader).toContain("Path=/");
+  expect(setCookieHeader).toContain("Max-Age=2592000");
 
   const cookieValue = setCookieHeader!.split(";")[0];
 
@@ -112,16 +113,19 @@ test("logout destroys the session so /api/v1/me subsequently returns 401", async
 });
 
 // Bootstrap-on-shared-DB strategy: this suite runs against the same
-// long-lived Postgres instance as every other hub test file, which by now
-// always has users seeded by earlier suites. That makes the "refuse when
-// users already exist" path naturally deterministic here -- no setup
-// needed, it will always be true. We do NOT truncate the shared `users`
-// table (that would break concurrently-run/earlier suites' assumptions).
-// To also exercise the happy path safely, we run it inside a Postgres
-// transaction that deletes `users`, calls bootstrap, and is always rolled
-// back at the end -- other connections never see the uncommitted delete,
-// so the shared DB is left untouched regardless of pass/fail.
+// long-lived Postgres instance as every other hub test file. We do NOT
+// truncate the shared `users` table (that would break concurrently-run/
+// earlier suites' assumptions). To also exercise the happy path safely,
+// we run it inside a Postgres transaction that deletes `users`, calls
+// bootstrap, and is always rolled back at the end -- other connections
+// never see the uncommitted delete, so the shared DB is left untouched
+// regardless of pass/fail.
 test("bootstrap refuses to create a second admin when users already exist", async () => {
+  // Explicitly seed a user rather than relying on earlier tests in this
+  // file (or other suites) having already inserted one -- that made this
+  // test order-coupled and it could pass for the wrong reason (or fail)
+  // if run in isolation or in a different order.
+  await createUser(sql, uniqueEmail("bootstrap-refuse-precondition"), "password123");
   const app = buildApp({ sql, config });
 
   const res = await app.request("/api/v1/auth/bootstrap", {
