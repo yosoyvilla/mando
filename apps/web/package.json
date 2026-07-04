@@ -5,6 +5,7 @@
     "build": "vite build",
     "dev": "bunx vite",
     "preview": "vite preview",
+    "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -37,6 +38,7 @@
     "@tailwindcss/typography": "^0.5.19",
     "@tailwindcss/vite": "^4.2.4",
     "@tanstack/router-plugin": "^1.167.35",
+    "@types/bun": "^1.3.13",
     "@types/diff": "^8.0.0",
     "@types/dockerode": "^4.0.1",
     "@types/react": "^19.2.14",
