@@ -107,8 +107,30 @@ export async function startStubOpencode(): Promise<StubOpencode> {
     const now = Date.now();
     const messageId = crypto.randomUUID();
     const model = { id: "stub-model", providerID: "stub", variant: "default" };
-    const firstChunk = "stub reply incoming -- ";
-    const secondChunk = `stub reply to: ${promptText}`;
+
+    // Reply text is overridable via MANDO_STUB_REPLY so the README
+    // screenshot capture (e2e/scripts/capture-screenshots.ts) can show a
+    // realistic assistant answer instead of the placeholder-looking default.
+    // When the env var is unset (every normal `bunx playwright test` run),
+    // the two chunks below are byte-identical to what the suite has always
+    // produced -- session-drive.spec.ts asserts both "stub reply incoming"
+    // (the first delta) and `stub reply to: <prompt>` (the full text), so
+    // the default MUST NOT change. A custom reply is split near its midpoint
+    // (on a space) into the same two-delta shape, preserving the
+    // partial-then-full streaming the pipeline exercises.
+    const envReply = process.env.MANDO_STUB_REPLY;
+    let firstChunk: string;
+    let secondChunk: string;
+    if (envReply && envReply.length > 0) {
+      const mid = Math.floor(envReply.length / 2);
+      const spaceIdx = envReply.lastIndexOf(" ", mid);
+      const split = spaceIdx > 0 ? spaceIdx + 1 : mid;
+      firstChunk = envReply.slice(0, split);
+      secondChunk = envReply.slice(split);
+    } else {
+      firstChunk = "stub reply incoming -- ";
+      secondChunk = `stub reply to: ${promptText}`;
+    }
     const replyText = `${firstChunk}${secondChunk}`;
 
     broadcast({
