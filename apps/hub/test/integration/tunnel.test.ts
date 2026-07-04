@@ -218,6 +218,49 @@ test(
 );
 
 test(
+  "two hello frames sent back-to-back only register once and leak no timer",
+  async () => {
+    const registry = new Registry();
+    const server = await startTestServer({ sql, config, registry });
+    const { machine, token } = await seedMachine("duplicate-hello");
+
+    const ws = new WebSocket(server.wsUrl);
+    await waitForOpen(ws);
+
+    const registeredFrames: Frame[] = [];
+    ws.addEventListener("message", (evt) => {
+      const raw = (evt as MessageEvent).data;
+      if (typeof raw !== "string") return;
+      try {
+        const frame = parseFrame(raw);
+        if (frame.type === "registered") registeredFrames.push(frame);
+      } catch {
+        // ignore
+      }
+    });
+
+    // Send both hellos before the first one's findMachineByToken await
+    // (a real DB round trip) can resolve, reproducing the race that used
+    // to let a second `handleHello` run and overwrite (leak) the first
+    // pingTimer -- see ws.ts's helloInProgress guard.
+    ws.send(helloFrame("hello-dup-1", token));
+    ws.send(helloFrame("hello-dup-2", token));
+
+    await waitForFrame(ws, (f) => f.type === "registered");
+    // Give a wrongly-processed second hello time to also register, if the
+    // guard were missing.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    expect(registeredFrames.length).toBe(1);
+    expect(registry.get(machine.id)).not.toBeNull();
+
+    ws.close();
+    server.stop();
+  },
+  FRAME_WAIT_MS * 2,
+);
+
+test(
   "a malformed frame does not crash the connection",
   async () => {
     const registry = new Registry();
