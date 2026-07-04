@@ -52,7 +52,8 @@ export function MachinePicker({
         console.error("Failed to load machines:", err);
         setState({
           status: "error",
-          message: "Couldn't load your machines. Check your connection and try again.",
+          message:
+            "Couldn't load your machines. Check your connection and try again.",
         });
       });
   }, [client]);
@@ -179,8 +180,13 @@ export function MachinePicker({
                   {machine.online ? (
                     "Ready"
                   ) : machine.lastSeenAt ? (
-                    <span title={formatAbsoluteTime(machine.lastSeenAt) ?? undefined}>
-                      Last seen {formatRelativeTime(machine.lastSeenAt) ?? "unknown"}
+                    <span
+                      title={
+                        formatAbsoluteTime(machine.lastSeenAt) ?? undefined
+                      }
+                    >
+                      Last seen{" "}
+                      {formatRelativeTime(machine.lastSeenAt) ?? "unknown"}
                     </span>
                   ) : (
                     "Last seen never"

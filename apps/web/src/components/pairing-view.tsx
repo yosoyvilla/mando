@@ -62,10 +62,7 @@ export function PairingView({
         </div>
 
         <div className="space-y-1">
-          <label
-            htmlFor="pairing-code"
-            className="text-sm font-medium text-fg"
-          >
+          <label htmlFor="pairing-code" className="text-sm font-medium text-fg">
             Pairing code
           </label>
           <input

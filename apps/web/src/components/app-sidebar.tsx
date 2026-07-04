@@ -14,6 +14,7 @@ import { useEffect, useState, useMemo } from "react";
 import { parsePatchFiles } from "@pierre/diffs";
 import { Avatar } from "@/components/ui/avatar";
 import { StatusDot } from "@/components/status-dot";
+import { ThemeSwitcher } from "@/components/theme-switcher";
 import {
   ComboBox,
   ComboBoxContent,
@@ -319,58 +320,61 @@ export default function AppSidebar(
         </SidebarSectionGroup>
       </SidebarContent>
 
-      <SidebarFooter className="flex flex-row justify-between gap-4 group-data-[state=collapsed]:flex-col">
-        <Menu>
-          <MenuTrigger
-            className="flex w-full items-center justify-between"
-            aria-label="Profile"
-          >
-            <div className="flex items-center gap-x-2">
-              <Avatar
-                className="size-8 *:size-8 group-data-[state=collapsed]:size-6 group-data-[state=collapsed]:*:size-6"
-                isSquare
-                initials={identityLabel.slice(0, 2).toUpperCase()}
-              />
-              <div className="in-data-[collapsible=dock]:hidden text-sm">
-                <SidebarLabel>{identityLabel}</SidebarLabel>
+      <SidebarFooter className="flex flex-row items-center justify-between gap-2 group-data-[state=collapsed]:flex-col">
+        <div className="min-w-0 flex-1">
+          <Menu>
+            <MenuTrigger
+              className="flex w-full items-center justify-between"
+              aria-label="Profile"
+            >
+              <div className="flex items-center gap-x-2">
+                <Avatar
+                  className="size-8 *:size-8 group-data-[state=collapsed]:size-6 group-data-[state=collapsed]:*:size-6"
+                  isSquare
+                  initials={identityLabel.slice(0, 2).toUpperCase()}
+                />
+                <div className="in-data-[collapsible=dock]:hidden text-sm">
+                  <SidebarLabel>{identityLabel}</SidebarLabel>
+                </div>
               </div>
-            </div>
-            <ChevronUpDownIcon data-slot="chevron" />
-          </MenuTrigger>
-          <MenuContent
-            className="in-data-[sidebar-collapsible=collapsed]:min-w-56 min-w-(--trigger-width)"
-            placement="bottom right"
-          >
-            <MenuSection>
-              <MenuHeader separator>
-                <span className="block">{identityLabel}</span>
-                {selectedMachine && (
-                  <span className="block font-mono text-muted-fg text-xs">
-                    {selectedMachine.name}
-                  </span>
-                )}
-              </MenuHeader>
-            </MenuSection>
+              <ChevronUpDownIcon data-slot="chevron" />
+            </MenuTrigger>
+            <MenuContent
+              className="in-data-[sidebar-collapsible=collapsed]:min-w-56 min-w-(--trigger-width)"
+              placement="bottom right"
+            >
+              <MenuSection>
+                <MenuHeader separator>
+                  <span className="block">{identityLabel}</span>
+                  {selectedMachine && (
+                    <span className="block font-mono text-muted-fg text-xs">
+                      {selectedMachine.name}
+                    </span>
+                  )}
+                </MenuHeader>
+              </MenuSection>
 
-            <MenuItem href="#dashboard">
-              <HomeIcon />
-              Dashboard
-            </MenuItem>
-            <MenuItem href="/settings">
-              <Cog6ToothIcon />
-              Settings
-            </MenuItem>
-            <MenuItem href="#security">
-              <ShieldCheckIcon />
-              Security
-            </MenuItem>
-            <MenuSeparator />
-            <MenuItem onAction={handleLogout}>
-              <ArrowRightStartOnRectangleIcon />
-              Log out
-            </MenuItem>
-          </MenuContent>
-        </Menu>
+              <MenuItem href="#dashboard">
+                <HomeIcon />
+                Dashboard
+              </MenuItem>
+              <MenuItem href="/settings">
+                <Cog6ToothIcon />
+                Settings
+              </MenuItem>
+              <MenuItem href="#security">
+                <ShieldCheckIcon />
+                Security
+              </MenuItem>
+              <MenuSeparator />
+              <MenuItem onAction={handleLogout}>
+                <ArrowRightStartOnRectangleIcon />
+                Log out
+              </MenuItem>
+            </MenuContent>
+          </Menu>
+        </div>
+        <ThemeSwitcher />
       </SidebarFooter>
       <SidebarRail />
     </Sidebar>
