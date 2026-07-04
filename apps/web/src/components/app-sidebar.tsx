@@ -6,10 +6,10 @@ import {
   FileDiffIcon,
   HomeIcon,
   PlusIcon,
+  ServerIcon,
   ShieldCheckIcon,
   TrashIcon,
 } from "@/components/icons/lucide";
-import { ProviderIcon } from "@/components/icons/provider-icon";
 import { useEffect, useState, useMemo } from "react";
 import { parsePatchFiles } from "@pierre/diffs";
 import { Avatar } from "@/components/ui/avatar";
@@ -49,75 +49,48 @@ import {
   useSessions,
   useCreateSession,
   useDeleteSession,
-  useHostname,
   useGitDiff,
-  useInstances,
+  useMachines,
+  useSelectedMachine,
 } from "@/hooks/use-opencode";
-import { useInstanceStore } from "@/stores/instance-store";
+import { useMachineStore } from "@/stores/machine-store";
+import { useAuth } from "@/contexts/auth-context";
 import { useNavigate, useMatch } from "@tanstack/react-router";
 import type { Session } from "@opencode-ai/sdk/v2";
-import type { BackendProvider } from "@/lib/backend-url";
+import type { Machine } from "@/lib/hub-client";
 
-interface InstanceData {
-  id: string;
-  name: string;
-  provider?: BackendProvider;
-  directory: string;
-  port: number;
-}
-
-function formatDirectoryPath(directory: string): string {
-  const normalized = directory.replace(/\\+/g, "/").replace(/\/+$/g, "");
-  const homePath =
-    normalized.match(/^\/Users\/[^/]+\/(.+)$/) ??
-    normalized.match(/^\/home\/[^/]+\/(.+)$/) ??
-    normalized.match(/^[A-Za-z]:\/Users\/[^/]+\/(.+)$/);
-
-  if (homePath?.[1]) return homePath[1];
-  if (normalized.startsWith("~/")) return normalized.slice(2);
-  if (normalized.startsWith("/")) return normalized.slice(1) || "/";
-
-  return normalized || directory;
-}
-
-function InstanceSwitcher() {
+function MachineSwitcher() {
   const navigate = useNavigate();
-  const instance = useInstanceStore((s) => s.instance);
-  const setInstance = useInstanceStore((s) => s.setInstance);
-  const { data } = useInstances();
-  const instances: InstanceData[] = data?.instances ?? [];
-  const [inputValue, setInputValue] = useState(instance?.name ?? "");
+  const selectedMachineId = useMachineStore((s) => s.selectedMachineId);
+  const setSelectedMachineId = useMachineStore((s) => s.setSelectedMachineId);
+  const selectedMachine = useSelectedMachine();
+  const { data } = useMachines();
+  const machines: Machine[] = data ?? [];
+  const [inputValue, setInputValue] = useState(selectedMachine?.name ?? "");
 
   useEffect(() => {
-    setInputValue(instance?.name ?? "");
-  }, [instance?.id, instance?.name]);
+    setInputValue(selectedMachine?.name ?? "");
+  }, [selectedMachine?.id, selectedMachine?.name]);
 
-  const filteredInstances = useMemo(() => {
+  const filteredMachines = useMemo(() => {
     const query = inputValue.trim().toLowerCase();
 
-    if (!query || query === instance?.name.toLowerCase()) {
-      return instances;
+    if (!query || query === selectedMachine?.name.toLowerCase()) {
+      return machines;
     }
 
-    return instances.filter((item) =>
-      `${item.name} ${item.directory} ${item.port}`
-        .toLowerCase()
-        .includes(query),
+    return machines.filter((item) =>
+      `${item.name} ${item.platform ?? ""}`.toLowerCase().includes(query),
     );
-  }, [inputValue, instance?.name, instances]);
+  }, [inputValue, selectedMachine?.name, machines]);
 
   const handleSelectionChange = (key: React.Key | null) => {
     if (key == null) return;
 
-    const selected = instances.find((item) => item.id === String(key));
-    if (!selected) return;
+    const selected = machines.find((item) => item.id === String(key));
+    if (!selected || !selected.online) return;
 
-    setInstance({
-      id: selected.id,
-      name: selected.name,
-      port: selected.port,
-      provider: selected.provider ?? "opencode",
-    });
+    setSelectedMachineId(selected.id);
     setInputValue(selected.name);
     navigate({ to: "/" });
   };
@@ -125,47 +98,48 @@ function InstanceSwitcher() {
   return (
     <div className="col-span-full min-w-0 py-1 in-data-[state=collapsed]:hidden">
       <ComboBox
-        aria-label="Switch instance"
-        selectedKey={instance?.id ?? null}
+        aria-label="Switch machine"
+        selectedKey={selectedMachine?.id ?? null}
         inputValue={inputValue}
         onInputChange={setInputValue}
         onSelectionChange={handleSelectionChange}
-        isDisabled={!data || instances.length === 0}
+        isDisabled={!data || machines.length === 0}
       >
         <ComboBoxInput
           prefix={
-            <ProviderIcon
-              provider={instance?.provider}
+            <ServerIcon
               data-slot="icon"
               className="size-4 text-muted-fg"
               aria-hidden="true"
             />
           }
-          placeholder={data ? "Select instance" : "Loading instances..."}
+          placeholder={data ? "Select machine" : "Loading machines..."}
           className="h-8 rounded-md px-2.5 py-0"
         />
         <ComboBoxContent
-          items={filteredInstances}
+          items={filteredMachines}
           popover={{
             placement: "bottom start",
             className: "w-(--trigger-width)",
           }}
         >
           {(item) => (
-            <ComboBoxItem id={item.id} textValue={item.name}>
-              <ProviderIcon
-                provider={item.provider}
-                data-slot="icon"
-                className="size-4"
-              />
+            <ComboBoxItem
+              id={item.id}
+              textValue={item.name}
+              isDisabled={!item.online}
+            >
+              <ServerIcon data-slot="icon" className="size-4" />
               <ComboBoxLabel className="min-w-0 truncate">
                 {item.name}
               </ComboBoxLabel>
               <ComboBoxDescription className="flex min-w-0 items-center gap-2 text-xs">
-                <span className="truncate">
-                  {formatDirectoryPath(item.directory)}
+                {item.platform && (
+                  <span className="truncate">{item.platform}</span>
+                )}
+                <span className="shrink-0">
+                  {item.online ? "Online" : "Offline"}
                 </span>
-                <span className="shrink-0 tabular-nums">:{item.port}</span>
               </ComboBoxDescription>
             </ComboBoxItem>
           )}
@@ -186,9 +160,9 @@ export default function AppSidebar(
 ) {
   const [creating, setCreating] = useState(false);
   const navigate = useNavigate();
-  const instance = useInstanceStore((s) => s.instance);
-  const { data: hostnameData } = useHostname();
-  const hostname = hostnameData?.hostname ?? "Loading...";
+  const selectedMachine = useSelectedMachine();
+  const { user, logout } = useAuth();
+  const identityLabel = user?.email ?? "Account";
   const { data: sessionsData, mutate: mutateSessions } = useSessions();
   const createSession = useCreateSession();
   const deleteSession = useDeleteSession();
@@ -242,6 +216,16 @@ export default function AppSidebar(
     }
   }
 
+  async function handleLogout() {
+    try {
+      await logout();
+      navigate({ to: "/login" });
+    } catch (error) {
+      console.error("Failed to log out:", error);
+      toast.error("Failed to log out");
+    }
+  }
+
   return (
     <Sidebar {...props}>
       <SidebarHeader>
@@ -255,7 +239,7 @@ export default function AppSidebar(
       <SidebarContent>
         <SidebarSectionGroup>
           <SidebarSection>
-            <InstanceSwitcher />
+            <MachineSwitcher />
           </SidebarSection>
 
           <SidebarSection>
@@ -263,6 +247,7 @@ export default function AppSidebar(
               tooltip="New Session"
               onPress={handleNewSession}
               className="cursor-pointer gap-x-2"
+              data-testid="new-session"
             >
               <PlusIcon className="size-4 shrink-0" data-slot="icon" />
               <SidebarLabel>
@@ -329,10 +314,10 @@ export default function AppSidebar(
               <Avatar
                 className="size-8 *:size-8 group-data-[state=collapsed]:size-6 group-data-[state=collapsed]:*:size-6"
                 isSquare
-                initials={hostname.slice(0, 2).toUpperCase()}
+                initials={identityLabel.slice(0, 2).toUpperCase()}
               />
               <div className="in-data-[collapsible=dock]:hidden text-sm">
-                <SidebarLabel>{hostname}</SidebarLabel>
+                <SidebarLabel>{identityLabel}</SidebarLabel>
               </div>
             </div>
             <ChevronUpDownIcon data-slot="chevron" />
@@ -343,10 +328,10 @@ export default function AppSidebar(
           >
             <MenuSection>
               <MenuHeader separator>
-                <span className="block">{hostname}</span>
-                {instance && (
+                <span className="block">{identityLabel}</span>
+                {selectedMachine && (
                   <span className="block text-muted-fg text-xs">
-                    {instance.name}
+                    {selectedMachine.name}
                   </span>
                 )}
               </MenuHeader>
@@ -365,7 +350,7 @@ export default function AppSidebar(
               Security
             </MenuItem>
             <MenuSeparator />
-            <MenuItem href="#logout">
+            <MenuItem onAction={handleLogout}>
               <ArrowRightStartOnRectangleIcon />
               Log out
             </MenuItem>

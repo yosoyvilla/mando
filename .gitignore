@@ -2,9 +2,7 @@
 
 # Dependencies
 node_modules
-.pnp
 .opencode
-.pnp.js
 
 # Local env files
 .env
@@ -15,21 +13,16 @@ node_modules
 
 # Testing
 coverage
+test-results/
+playwright-report/
 
 # Turbo
 .turbo
 
-# Vercel
-.vercel
-
 # Build Outputs
-.next/
 out/
 build
 dist
-
-# Local reference clones
-t3code/
 
 # Debug
 npm-debug.log*
@@ -39,3 +32,6 @@ yarn-error.log*
 # Misc
 .DS_Store
 *.pem
+.mando-pid
+.superpowers/
+.claude/agent-context/
