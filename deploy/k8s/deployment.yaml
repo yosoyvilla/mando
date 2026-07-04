@@ -27,6 +27,11 @@ spec:
         app.kubernetes.io/version: "0.1.0"
     spec:
       serviceAccountName: mando-hub
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+        runAsNonRoot: true
+        runAsUser: 1000
       containers:
         - name: hub
           # Placeholder image -- in real deployments this is set by CI/CD to
