@@ -47,6 +47,20 @@ export function removePidFile(path: string): void {
   }
 }
 
+// True if a process with this pid exists and is signalable by us. Sending
+// signal 0 is the standard POSIX/Node idiom for a liveness check -- it
+// delivers no actual signal, just runs the permission/existence checks
+// `kill` would otherwise do. Shared by connect() (to avoid spawning a
+// second daemon over an already-running one), disconnect(), and status().
+export function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Tiny on-disk record of when this machine was last known to be alive
 // (last successful local-opencode health check, or last successful
 // registration with the hub) -- read by status() to answer "when did we

@@ -1,10 +1,12 @@
 # OpenCode Mando
 
-OpenCode Mando lets you drive an opencode coding session from somewhere other than the machine it's running on. Install a small program on your computer, run one command, approve the connection in your browser, and from then on you can open a web page on your phone, another computer, or any browser and watch and steer that session as if you were sitting in front of the original machine. Think of it as a remote control: the actual work still happens on your machine, but the screen and the buttons can be anywhere.
+OpenCode Mando lets you drive an opencode coding session from somewhere other than the machine it's running on (opencode is an AI coding-agent CLI you run in a terminal). Install a small program on your computer, run one command, approve the connection in your browser, and from then on you can open a web page on your phone, another computer, or any browser and watch and steer that session as if you were sitting in front of the original machine. Think of it as a remote control: the actual work still happens on your machine, but the screen and the buttons can be anywhere.
 
 ## Quick start
 
 This gets a working setup running in about five minutes: a server (the "hub") that hosts the web interface, and one machine connected to it.
+
+**Prerequisites:** Docker (with Compose) to run the hub; Bun and git on the machine you want to connect, plus write access to `/usr/local/bin` for the `cp` step below.
 
 ### 1. Start the hub
 
@@ -44,7 +46,7 @@ mando install-command
 
 Now, from inside an opencode session on that machine, run:
 
-```
+```text
 /mando
 ```
 
@@ -63,8 +65,8 @@ Three pieces are involved: the browser, the hub, and the machine's own opencode 
 +----------------+   HTTPS/WSS   +------------+   outbound WSS   +------------------+
 |  web interface | <-----------> | hub server | <--------------> | mando agent      |
 +----------------+               | (Postgres) |                  |  -> opencode     |
-                                  +------------+                  |     (localhost)  |
-                                                                   +------------------+
+                                 +------------+                  |     (localhost)  |
+                                                                 +------------------+
 ```
 
 The machine's `mando` agent never listens for incoming connections. It dials out to the hub over a secure WebSocket and keeps that connection open. When you interact with a session in the browser, the hub forwards your request over that same connection to the machine, which relays it to the local opencode server and streams the response back the same way. Because the connection is always initiated by the machine, nothing on that machine needs to be reachable from the internet, and opencode's own local server is never exposed directly.
@@ -101,11 +103,11 @@ Available commands:
 | `--opencode-auto` | Marks the connection as machine-initiated (used by the `/mando` command). |
 | `--json` | Prints machine-readable output instead of plain text. |
 
-All commands accept `--json` for machine-readable output.
+`connect`, `disconnect`, and `status` accept `--json` for machine-readable output.
 
 ## The /mando command
 
-Running `mando install-command` writes a `/mando` slash command into opencode's commands directory (`~/.config/opencode/commands/mando.md`, or wherever `OPENCODE_CONFIG_DIR` points). Typing `/mando` inside an opencode session runs `mando connect --opencode-auto --json` for you, so pairing and connecting can be done without leaving the session: it prints a pairing code and a link the first time, and simply reports the connection status on later runs once the machine is already paired.
+Running `mando install-command` writes a `/mando` slash command into opencode's commands directory (`~/.config/opencode/commands/mando.md`, or wherever `OPENCODE_CONFIG_DIR` points). Typing `/mando` inside an opencode session runs `mando connect --opencode-auto --json $ARGUMENTS` for you (`$ARGUMENTS` forwards anything typed after `/mando`), so pairing and connecting can be done without leaving the session: it prints a pairing code and a link the first time, and simply reports the connection status on later runs once the machine is already paired.
 
 ## Configuration
 

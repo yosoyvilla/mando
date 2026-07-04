@@ -2,7 +2,7 @@ import { hostname } from "node:os";
 import { join } from "node:path";
 import { readConfig, writeConfig, type AgentConfig } from "./config";
 import { detectOpencodePort as defaultDetectOpencodePort } from "./opencode";
-import { defaultPidFilePath, writePidFile } from "./daemon";
+import { defaultPidFilePath, isProcessAlive as defaultIsProcessAlive, readPidFile, writePidFile } from "./daemon";
 
 export interface ConnectOpts {
   json?: boolean;
@@ -28,10 +28,15 @@ export interface ConnectOpts {
   fetchFn?: typeof fetch;
   detectOpencodePort?: () => Promise<number | null>;
   spawnDaemon?: (opencodePort: number) => number;
+  // Swaps out the real POSIX liveness check (daemon.ts's `isProcessAlive`,
+  // itself `process.kill(pid, 0)` in a try/catch) used by the
+  // already-running-daemon guard below, so tests can simulate a live or
+  // dead pid without depending on real OS process ids.
+  isProcessAlive?: (pid: number) => boolean;
 }
 
 export type ConnectResult =
-  | { status: "connected"; machine: string; uiUrl: string }
+  | { status: "connected"; machine: string; uiUrl: string; alreadyRunning?: boolean }
   | { status: "error"; message: string };
 
 type PairingRequestResponse = { code: string; expiresAt: string };
@@ -139,10 +144,17 @@ function defaultSpawnDaemon(opencodePort: number): number {
 // detect the local opencode server, spawn the detached daemon, and return
 // quickly -- it never itself holds the hub WS connection open. See
 // task-3.4-report.md for the pairing-poll and daemon-spawn test strategy.
+//
+// Before spawning, it checks the same pidfile disconnect()/status() trust
+// (see daemon.ts's isProcessAlive) for an already-running daemon -- e.g. a
+// second `/mando` invocation in the same opencode session -- so repeat
+// calls report the existing connection instead of leaking another detached
+// process and opening a second tunnel for the same machine.
 export async function connect(opts: ConnectOpts = {}): Promise<ConnectResult> {
   const fetchFn = opts.fetchFn ?? fetch;
   const detectOpencodePort = opts.detectOpencodePort ?? defaultDetectOpencodePort;
   const spawnDaemon = opts.spawnDaemon ?? defaultSpawnDaemon;
+  const isProcessAlive = opts.isProcessAlive ?? defaultIsProcessAlive;
   const pollIntervalMs = opts.pairingPollIntervalMs ?? DEFAULT_PAIRING_POLL_INTERVAL_MS;
 
   const existing = readConfig();
@@ -182,6 +194,16 @@ export async function connect(opts: ConnectOpts = {}): Promise<ConnectResult> {
 
     token = approvedToken;
     writeConfig({ hubUrl, token, machineName });
+  }
+
+  const existingPid = readPidFile(defaultPidFilePath());
+  if (existingPid !== null && isProcessAlive(existingPid)) {
+    printResult(
+      opts.json,
+      { status: "connected", machine: machineName, uiUrl: hubUrl, alreadyRunning: true },
+      `Already connected as "${machineName}". Manage this machine at ${hubUrl}`,
+    );
+    return { status: "connected", machine: machineName, uiUrl: hubUrl, alreadyRunning: true };
   }
 
   const opencodePort = opts.opencodePort ?? (await detectOpencodePort());

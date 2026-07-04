@@ -235,4 +235,54 @@ describe("connect + daemon + disconnect (real subprocess, fake hub)", () => {
     },
     20_000,
   );
+
+  it(
+    "does not spawn a second daemon when connect() is called again while one is already running",
+    async () => {
+      fakeHub = startFakeHub();
+      stubOpencode = Bun.serve({
+        port: 0,
+        fetch(req) {
+          const path = new URL(req.url).pathname;
+          if (path === "/ping") return new Response("pong", { status: 200 });
+          return new Response("not found", { status: 404 });
+        },
+      });
+
+      const machineName = "respawn-guard-test-machine";
+      writeConfig({ hubUrl: fakeHub.url, token: "pre-seeded-token", machineName });
+
+      const first = await connect({ opencodePort: stubOpencode.port! });
+      expect(first).toEqual({ status: "connected", machine: machineName, uiUrl: fakeHub.url });
+
+      daemonPid = readPidFile(process.env.MANDO_PID_FILE!);
+      expect(daemonPid).not.toBeNull();
+      expect(isAlive(daemonPid!)).toBe(true);
+
+      await waitFor(() => fakeHub!.isOnline(machineName), 8000);
+
+      // A second connect() call -- e.g. running `/mando` again in the same
+      // opencode session -- must detect the still-live daemon from the
+      // first call instead of spawning a second, redundant one.
+      const second = await connect({ opencodePort: stubOpencode.port! });
+      expect(second).toEqual({
+        status: "connected",
+        machine: machineName,
+        uiUrl: fakeHub.url,
+        alreadyRunning: true,
+      });
+
+      // Same single daemon process the whole time: pidfile unchanged, and
+      // still exactly one machine registered with the fake hub.
+      expect(readPidFile(process.env.MANDO_PID_FILE!)).toBe(daemonPid);
+      expect(isAlive(daemonPid!)).toBe(true);
+
+      const disconnectResult = disconnect();
+      expect(disconnectResult).toEqual({ status: "disconnected" });
+
+      await waitFor(() => !fakeHub!.isOnline(machineName), 8000);
+      await waitFor(() => !isAlive(daemonPid!), 4000);
+    },
+    20_000,
+  );
 });

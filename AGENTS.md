@@ -26,12 +26,6 @@ exposed to the network.
 | `packages/opencode-plugin` | `@mando/opencode-plugin`. The `/mando` opencode slash-command template (`commands/mando.md`), installed into a user's opencode config by `mando install-command`. |
 | `deploy` | `Dockerfile`, `docker-compose.yml` (hub + `postgres:17`, host port `5433`), and `k8s/` manifests (Deployment pinned to 1 replica, Service, NetworkPolicy, ServiceAccount, example Secret/Ingress). |
 
-`packages/cli` also exists in the tree but is leftover scaffolding from an
-earlier, pre-hub prototype (a local-only launcher with no tunnel/protocol
-awareness). It is not part of the current architecture — do not extend it or
-treat it as documentation of how this system works; if you touch it, prefer
-removing it entirely once nothing depends on it.
-
 ## Golden rules
 
 - **TypeScript only.** No plain JavaScript source files.
