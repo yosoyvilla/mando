@@ -34,3 +34,4 @@ yarn-error.log*
 *.pem
 .mando-pid
 .superpowers/
+.claude/agent-context/
