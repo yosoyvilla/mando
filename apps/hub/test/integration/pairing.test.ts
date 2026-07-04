@@ -98,8 +98,12 @@ test("full lifecycle: request -> approve -> poll returns approved + token", asyn
   expect(machine!.name).toBe("dave-laptop");
   expect(machine!.platform).toBe("darwin");
 
+  // approvedBody.token is the `<tokenId>.<secret>` composite (see
+  // machines/repo.ts findMachineByToken) -- only the secret half is
+  // argon2-hashed, so verify against that half.
+  const [, secret] = approvedBody.token.split(/\.(.*)/s);
   const [tokenRow] = await sql`select token_hash from machine_tokens where machine_id = ${approveBody.machineId}`;
-  expect(await verifySecret(approvedBody.token, tokenRow.token_hash)).toBe(true);
+  expect(await verifySecret(secret, tokenRow.token_hash)).toBe(true);
 });
 
 test("approving an expired code is rejected", async () => {
@@ -200,8 +204,18 @@ test("findMachineByToken resolves a paired machine's plaintext token and rejects
   expect(found).not.toBeNull();
   expect(found!.id).toBe(machineId);
 
+  // No dot at all -- can't even split into id/secret halves.
   const notFound = await findMachineByToken(sql, "not-a-real-token");
   expect(notFound).toBeNull();
+});
+
+test("findMachineByToken rejects a malformed token without throwing", async () => {
+  // Has a dot, but the id half isn't a valid uuid -- the where-clause's
+  // implicit uuid cast would throw in postgres if this weren't caught.
+  await expect(findMachineByToken(sql, "not-a-uuid.some-secret")).resolves.toBeNull();
+
+  // A dot with nothing after it (empty secret half) is also malformed.
+  await expect(findMachineByToken(sql, "00000000-0000-0000-0000-000000000000.")).resolves.toBeNull();
 });
 
 test("revokeMachine invalidates the machine's token and marks it revoked", async () => {

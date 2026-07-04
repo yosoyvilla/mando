@@ -17,7 +17,7 @@ export function generateCode(): string {
   return `${chars.slice(0, 4).join("")}-${chars.slice(4).join("")}`;
 }
 
-function generateToken(): string {
+function generateSecret(): string {
   return Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("hex");
 }
 
@@ -86,27 +86,31 @@ export async function approvePairing(
   if (request.consumed_at) throw new PairingError("already_consumed");
   if (new Date(request.expires_at).getTime() <= Date.now()) throw new PairingError("expired");
 
-  const token = generateToken();
-  const tokenHash = await hashSecret(token);
+  const secret = generateSecret();
+  const tokenHash = await hashSecret(secret);
 
   // Mint the machine + token and consume the code atomically. The
   // `consumed_at is null` guard on the update means only one concurrent
   // approve can win the race for a given code; if this one loses, the
   // transaction rolls back so no orphan machine/token survives.
-  const machineId = await sql.begin(async (tx) => {
+  const { machineId, tokenId } = await sql.begin(async (tx) => {
     const machine = await createMachine(tx, {
       userId,
       name: request.machine_name,
       platform: request.platform,
     });
-    await insertMachineToken(tx, { machineId: machine.id, tokenHash });
+    const tokenId = await insertMachineToken(tx, { machineId: machine.id, tokenHash });
 
     const consumed = await consumePairingRequest(tx, code, userId, machine.id);
     if (!consumed) throw new PairingError("already_consumed");
 
-    return machine.id;
+    return { machineId: machine.id, tokenId };
   });
 
+  // The plaintext token is `<tokenId>.<secret>` -- see machines/repo.ts
+  // findMachineByToken for why (O(1) lookup by the indexed token id
+  // instead of an argon2 scan over every live token).
+  const token = `${tokenId}.${secret}`;
   pendingTokens.set(code, token);
   return { machineId, token };
 }

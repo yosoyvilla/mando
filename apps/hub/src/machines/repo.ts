@@ -40,34 +40,51 @@ export async function revokeMachine(sql: Sql, id: string): Promise<void> {
   });
 }
 
+// Returns the new row's id, which becomes the lookup prefix embedded in
+// the plaintext token handed back to the caller (see findMachineByToken).
 export async function insertMachineToken(
   sql: Executor,
   input: { machineId: string; tokenHash: string },
-): Promise<void> {
-  await sql`insert into machine_tokens (machine_id, token_hash) values (${input.machineId}, ${input.tokenHash})`;
+): Promise<string> {
+  const rows = await sql`
+    insert into machine_tokens (machine_id, token_hash)
+    values (${input.machineId}, ${input.tokenHash})
+    returning id
+  `;
+  return rows[0]!.id as string;
 }
 
-// Tokens are stored as argon2 hashes (never plaintext), so there is no
-// column to equality-match the presented token against. Instead we scope
-// to non-revoked tokens on non-revoked machines (the candidate set an
-// active agent connection could possibly belong to) and run verifySecret
-// against each hash until one matches. This is O(active machines) per
-// lookup, which is the accepted tradeoff for not persisting recoverable
-// secrets -- fine at the fleet sizes this hub is designed for (single
-// user/team, not a multi-tenant SaaS).
+// Plaintext tokens are `<tokenId>.<secret>`, where tokenId is the
+// machine_tokens primary key. That lets lookup go straight to the
+// indexed row by id -- O(1) -- instead of scanning every non-revoked
+// token and running argon2 against each one. Only the secret half is
+// ever argon2-verified (exactly once per call), since the tokenId half
+// is just a lookup key, not a credential.
 export async function findMachineByToken(sql: Sql, token: string): Promise<Machine | null> {
-  const rows = await sql`
-    select m.*, t.token_hash as token_hash
-    from machine_tokens t
-    join machines m on m.id = t.machine_id
-    where t.revoked_at is null and m.revoked_at is null
-  `;
+  const dotIndex = token.indexOf(".");
+  if (dotIndex <= 0 || dotIndex === token.length - 1) return null; // malformed: no id or no secret half
 
-  for (const row of rows) {
-    if (await verifySecret(token, row.token_hash as string)) {
-      const { token_hash, ...machine } = row as Machine & { token_hash: string };
-      return machine as Machine;
-    }
+  const tokenId = token.slice(0, dotIndex);
+  const secret = token.slice(dotIndex + 1);
+
+  try {
+    const rows = await sql`
+      select m.*, t.token_hash as token_hash
+      from machine_tokens t
+      join machines m on m.id = t.machine_id
+      where t.id = ${tokenId} and t.revoked_at is null and m.revoked_at is null
+    `;
+    const row = rows[0];
+    if (!row) return null;
+
+    if (!(await verifySecret(secret, row.token_hash as string))) return null;
+
+    const { token_hash, ...machine } = row as Machine & { token_hash: string };
+    return machine as Machine;
+  } catch {
+    // A malformed tokenId (e.g. not a valid uuid) makes postgres throw on
+    // the implicit cast in the where-clause -- treat that the same as
+    // "not found" rather than letting it bubble into a 500.
+    return null;
   }
-  return null;
 }
