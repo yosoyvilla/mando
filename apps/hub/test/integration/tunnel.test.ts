@@ -28,13 +28,16 @@ function uniqueTag(tag: string): string {
 // Seeds a machine + plaintext token directly against the repo layer,
 // bypassing the pairing HTTP flow -- this test only cares about what
 // happens once an agent presents a token over the tunnel socket, not how
-// the token was minted (that's pairing.test.ts's job).
+// the token was minted (that's pairing.test.ts's job). The plaintext
+// token mirrors the `<tokenId>.<secret>` composite that approvePairing
+// hands out (see machines/repo.ts findMachineByToken).
 async function seedMachine(tag: string) {
   const unique = uniqueTag(tag);
   const owner = await createUser(sql, `u${unique}@t.dev`, "correct-password");
   const machine = await createMachine(sql, { userId: owner.id, name: `${unique}-machine` });
-  const token = `tok_${unique}`;
-  await insertMachineToken(sql, { machineId: machine.id, tokenHash: await hashSecret(token) });
+  const secret = `tok_${unique}`;
+  const tokenId = await insertMachineToken(sql, { machineId: machine.id, tokenHash: await hashSecret(secret) });
+  const token = `${tokenId}.${secret}`;
   return { machine, token };
 }
 
@@ -53,13 +56,13 @@ function waitForOpen(ws: WebSocket): Promise<void> {
   });
 }
 
-// findMachineByToken scans every non-revoked token and runs a full argon2
-// verify against each one (see machines/repo.ts) -- on this suite's shared,
-// long-lived, never-truncated test DB (a deliberate convention, see
-// auth-routes.test.ts) that scan has been observed to take several
-// seconds once enough tokens accumulate across a long dev session. These
-// waits are sized generously so hello-frame round trips survive that,
-// rather than to allow for anything slow in the tunnel code itself.
+// findMachineByToken looks up the presented token's id directly (an
+// indexed PK lookup) and runs exactly one argon2 verify against that row
+// (see machines/repo.ts) -- it no longer scans every live token, so it
+// stays fast regardless of how many tokens have accumulated in this
+// suite's shared, long-lived, never-truncated test DB (a deliberate
+// convention, see auth-routes.test.ts). These waits are kept generous
+// for general CI/network slack, not to tolerate a slow lookup.
 const FRAME_WAIT_MS = 10_000;
 
 function waitForFrame(ws: WebSocket, predicate: (frame: Frame) => boolean, timeoutMs = FRAME_WAIT_MS): Promise<Frame> {
