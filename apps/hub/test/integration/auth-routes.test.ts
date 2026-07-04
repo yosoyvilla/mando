@@ -11,7 +11,7 @@ const url = process.env.TEST_DATABASE_URL ?? "postgres://mando:mando@localhost:5
 const sql = getDb(url);
 const config = loadConfig({
   DATABASE_URL: url,
-  COOKIE_SECRET: "test-secret",
+  COOKIE_SECRET: "test-secret-that-is-at-least-32-characters",
   PUBLIC_URL: "http://localhost:8080",
 });
 
@@ -202,8 +202,22 @@ test("invite requires an authenticated session", async () => {
   expect(res.status).toBe(401);
 });
 
-test("invite creates a user with a temp password when authenticated", async () => {
-  const owner = await createUser(sql, uniqueEmail("inviter"), "correct-password");
+test("invite from a non-admin authenticated user returns 403", async () => {
+  const nonAdmin = await createUser(sql, uniqueEmail("inviter-nonadmin"), "correct-password");
+  const sessionId = await createSession(sql, nonAdmin.id);
+  const app = buildApp({ sql, config });
+
+  const res = await app.request("/api/v1/auth/invite", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: `mando_sess=${sessionId}` },
+    body: JSON.stringify({ email: uniqueEmail("invitee-blocked") }),
+  });
+
+  expect(res.status).toBe(403);
+});
+
+test("invite creates a user with a temp password when the caller is an admin", async () => {
+  const owner = await createUser(sql, uniqueEmail("inviter-admin"), "correct-password", { isAdmin: true });
   const sessionId = await createSession(sql, owner.id);
   const app = buildApp({ sql, config });
 
@@ -222,4 +236,56 @@ test("invite creates a user with a temp password when authenticated", async () =
 
   const found = await findUserByEmail(sql, inviteeEmail);
   expect(await verifySecret(body.tempPassword, found.password_hash)).toBe(true);
+});
+
+test("inviting an email that already exists returns a generic 409, not a 500 or an enumeration signal", async () => {
+  const owner = await createUser(sql, uniqueEmail("inviter-admin-dup"), "correct-password", { isAdmin: true });
+  const sessionId = await createSession(sql, owner.id);
+  const app = buildApp({ sql, config });
+
+  const existingEmail = uniqueEmail("already-registered");
+  await createUser(sql, existingEmail, "some-password");
+
+  const res = await app.request("/api/v1/auth/invite", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: `mando_sess=${sessionId}` },
+    body: JSON.stringify({ email: existingEmail }),
+  });
+
+  expect(res.status).toBe(409);
+  const body = await res.json();
+  // Same neutral message a duplicate-email 409 gets -- nothing here should
+  // let a caller distinguish "exists" from any other reason creation failed.
+  expect(body.error).not.toMatch(/email/i);
+  expect(body.error).not.toMatch(/exist/i);
+  expect(body.tempPassword).toBeUndefined();
+});
+
+// Same rolled-back-transaction strategy as "bootstrap creates the first
+// admin only when zero users exist" above -- POST /api/v1/auth/bootstrap
+// only succeeds while zero users exist, which is already false on this
+// shared DB by the time this test runs.
+test("bootstrap creates the admin with is_admin true (rolled back)", async () => {
+  const RollbackMarker = Symbol("rollback");
+  try {
+    await sql.begin(async (tx) => {
+      await tx`delete from users`;
+      const app = buildApp({ sql: tx as unknown as typeof sql, config });
+
+      const email = uniqueEmail("bootstrap-is-admin");
+      const res = await app.request("/api/v1/auth/bootstrap", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password: "hunter2horse" }),
+      });
+      expect(res.status).toBe(201);
+
+      const found = await findUserByEmail(tx as unknown as typeof sql, email);
+      expect(found.is_admin).toBe(true);
+
+      throw RollbackMarker;
+    });
+  } catch (e) {
+    if (e !== RollbackMarker) throw e;
+  }
 });

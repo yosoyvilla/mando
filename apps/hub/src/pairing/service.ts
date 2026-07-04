@@ -11,9 +11,28 @@ const CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
 const TEN_MINUTES_MS = 10 * 60 * 1000;
 const MAX_CODE_COLLISION_RETRIES = 5;
 
+// Largest multiple of the alphabet's length (31) that fits in a byte
+// (0-255): floor(256/31)*31 = 248. Bytes in [0, 248) map onto the 31
+// characters with exactly 8 bytes per character, so `byte % 31` is uniform;
+// bytes in [248, 256) would map onto only the first 8 characters (248 % 31
+// == 0), giving those characters roughly 8/8 vs 9/8 the selection chance of
+// the rest -- a small but real modulo bias in a value used as a bearer
+// credential. Rejection sampling discards those few high bytes and draws
+// again instead of keeping the bias.
+const MAX_UNBIASED_BYTE = Math.floor(256 / CODE_ALPHABET.length) * CODE_ALPHABET.length;
+
+function randomAlphabetChar(): string {
+  // Rejection sampling: single extra crypto.getRandomValues() calls are
+  // cheap and this only loops (a vanishingly rare) more than once per
+  // character when the discarded range is hit.
+  for (;;) {
+    const [byte] = crypto.getRandomValues(new Uint8Array(1));
+    if (byte! < MAX_UNBIASED_BYTE) return CODE_ALPHABET[byte! % CODE_ALPHABET.length]!;
+  }
+}
+
 export function generateCode(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(8));
-  const chars = Array.from(bytes, (b) => CODE_ALPHABET[b % CODE_ALPHABET.length]);
+  const chars = Array.from({ length: 8 }, randomAlphabetChar);
   return `${chars.slice(0, 4).join("")}-${chars.slice(4).join("")}`;
 }
 

@@ -10,6 +10,7 @@ import { machineRoutes } from "./machines/routes";
 import { proxyRoutes } from "./proxy/routes";
 import { Registry } from "./tunnel/registry";
 import { tunnelWsHandler, websocket } from "./tunnel/ws";
+import { createRateLimiter, DEFAULT_RATE_LIMITS, type RateLimitConfig } from "./middleware/rate-limit";
 
 // Where the built web SPA (apps/web) lives. Its build is produced later
 // (Phase 5, Task 5.0) -- until then this directory won't exist, and every
@@ -47,6 +48,16 @@ export type AppDeps = {
   // 30s ping cadence / 5s hello grace period -- see tunnel/ws.ts.
   tunnelPingIntervalMs?: number;
   tunnelHelloTimeoutMs?: number;
+  // Per-route rate-limit overrides (see middleware/rate-limit.ts). Omitted
+  // routes fall back to DEFAULT_RATE_LIMITS; tests use this to set a low
+  // max/windowMs so the 429 path doesn't require actually waiting out a
+  // real window.
+  rateLimits?: {
+    login?: RateLimitConfig;
+    pairingRequest?: RateLimitConfig;
+    pairingStatus?: RateLimitConfig;
+    wsAgent?: RateLimitConfig;
+  };
 };
 
 // buildApp is the single place both the real server entry (src/index.ts,
@@ -56,6 +67,25 @@ export type AppDeps = {
 export function buildApp(deps: AppDeps): Hono<{ Variables: AuthVariables }> {
   const app = new Hono<{ Variables: AuthVariables }>();
   const registry = deps.registry ?? new Registry();
+  const rateLimits = deps.rateLimits ?? {};
+
+  // Rate limiters must be registered before the routes they guard --
+  // Hono composes matched handlers for a request in registration order, so
+  // a middleware added after its route's handler would never run first.
+  // See middleware/rate-limit.ts for the M3 fix this implements (no limiter
+  // previously existed on any of these, which made /auth/login's full
+  // argon2id verify and /pairing/request's DB insert an unauthenticated
+  // CPU/DB exhaustion target).
+  app.use("/api/v1/auth/login", createRateLimiter(rateLimits.login ?? DEFAULT_RATE_LIMITS.login));
+  app.use(
+    "/api/v1/pairing/request",
+    createRateLimiter(rateLimits.pairingRequest ?? DEFAULT_RATE_LIMITS.pairingRequest),
+  );
+  app.use(
+    "/api/v1/pairing/status",
+    createRateLimiter(rateLimits.pairingStatus ?? DEFAULT_RATE_LIMITS.pairingStatus),
+  );
+  app.use("/ws/agent", createRateLimiter(rateLimits.wsAgent ?? DEFAULT_RATE_LIMITS.wsAgent));
 
   app.route("/", userRoutes(deps.sql));
   app.route("/", pairingRoutes(deps.sql));

@@ -116,7 +116,7 @@ Running `mando install-command` writes a `/mando` slash command into opencode's 
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
 | `DATABASE_URL` | Yes | none | PostgreSQL connection string. |
-| `COOKIE_SECRET` | Yes | none | Secret used to sign browser session cookies. |
+| `COOKIE_SECRET` | Yes | none | Reserved for future cookie signing (sessions are currently opaque server-side tokens). Must be at least 32 characters. |
 | `PUBLIC_URL` | Yes | none | The externally reachable URL of the hub (used to build pairing links). |
 | `PORT` | No | `8080` | Port the hub listens on. |
 | `MANDO_ADMIN_EMAIL` | No | none | If set together with `MANDO_ADMIN_PASSWORD`, creates an admin account on startup if it doesn't already exist. |

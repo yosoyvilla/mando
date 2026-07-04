@@ -3,7 +3,7 @@ import { getDb } from "../../src/db/client";
 import { runMigrations } from "../../src/db/migrate";
 import { loadConfig } from "../../src/config";
 import { buildApp } from "../../src/app";
-import { findUserByEmail } from "../../src/users/repo";
+import { createUser, findUserByEmail } from "../../src/users/repo";
 import { bootstrapAdmin } from "../../src/bootstrap";
 
 const url =
@@ -13,7 +13,7 @@ const sql = getDb(url);
 
 const config = loadConfig({
   DATABASE_URL: url,
-  COOKIE_SECRET: "test-secret",
+  COOKIE_SECRET: "test-secret-that-is-at-least-32-characters",
   PUBLIC_URL: "http://localhost:8080",
 });
 
@@ -58,7 +58,7 @@ test("bootstrapAdmin creates the configured admin when absent, and is idempotent
   const email = uniqueEmail("bootstrap-admin");
   const adminConfig = loadConfig({
     DATABASE_URL: url,
-    COOKIE_SECRET: "test-secret",
+    COOKIE_SECRET: "test-secret-that-is-at-least-32-characters",
     PUBLIC_URL: "http://localhost:8080",
     MANDO_ADMIN_EMAIL: email,
     MANDO_ADMIN_PASSWORD: "hunter2horse",
@@ -69,6 +69,7 @@ test("bootstrapAdmin creates the configured admin when absent, and is idempotent
   const created = await findUserByEmail(sql, email);
   expect(created).not.toBeNull();
   expect(created.email).toBe(email);
+  expect(created.is_admin).toBe(true);
 
   // Second run must not throw even though the user already exists.
   await expect(bootstrapAdmin(sql, adminConfig)).resolves.toBeUndefined();
@@ -76,4 +77,29 @@ test("bootstrapAdmin creates the configured admin when absent, and is idempotent
 
 test("bootstrapAdmin is a no-op when admin env vars are unset", async () => {
   await expect(bootstrapAdmin(sql, config)).resolves.toBeUndefined();
+});
+
+test("bootstrapAdmin promotes a pre-existing non-admin account at the configured email to admin", async () => {
+  // Upgrade scenario: the account existed (e.g. from before is_admin was
+  // introduced) with is_admin still false -- bootstrapAdmin's early-return
+  // for "already exists" must not skip promoting it, or a real upgraded
+  // deployment's configured admin would stay locked out of
+  // admin-gated routes forever.
+  const email = uniqueEmail("bootstrap-promote");
+  await createUser(sql, email, "some-other-password");
+  const before = await findUserByEmail(sql, email);
+  expect(before.is_admin).toBe(false);
+
+  const adminConfig = loadConfig({
+    DATABASE_URL: url,
+    COOKIE_SECRET: "test-secret-that-is-at-least-32-characters",
+    PUBLIC_URL: "http://localhost:8080",
+    MANDO_ADMIN_EMAIL: email,
+    MANDO_ADMIN_PASSWORD: "hunter2horse",
+  });
+
+  await bootstrapAdmin(sql, adminConfig);
+
+  const after = await findUserByEmail(sql, email);
+  expect(after.is_admin).toBe(true);
 });

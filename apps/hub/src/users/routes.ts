@@ -5,7 +5,7 @@ import type postgres from "postgres";
 import { createUser, findUserByEmail, findUserById } from "./repo";
 import { verifySecret, DUMMY_HASH } from "../auth/password";
 import { createSession, destroySession } from "../auth/session";
-import { requireUser, type AuthVariables } from "../auth/middleware";
+import { requireUser, requireAdmin, type AuthVariables } from "../auth/middleware";
 
 type Sql = ReturnType<typeof postgres>;
 
@@ -38,6 +38,12 @@ function randomTempPassword(): string {
   // 32 hex chars of crypto-random material -- plenty of entropy for a
   // one-time temp password the invitee is expected to change on first use.
   return crypto.randomUUID().replaceAll("-", "");
+}
+
+function isUniqueViolation(err: unknown): boolean {
+  // Postgres SQLSTATE 23505 = unique_violation -- same detection the
+  // `postgres` client surfaces on `.code` used in pairing/service.ts.
+  return typeof err === "object" && err !== null && (err as { code?: string }).code === "23505";
 }
 
 function setSessionCookie(c: Context, sessionId: string): void {
@@ -95,17 +101,33 @@ export function userRoutes(sql: Sql): Hono<{ Variables: AuthVariables }> {
     if (count > 0) return c.json({ error: "already initialized" }, 409);
 
     const { email, password } = parsed.data;
-    const user = await createUser(sql, email, password);
+    // The first (and, by the count check above, only) user created this
+    // way is the bootstrap admin -- give it is_admin so it can actually use
+    // the admin-gated /api/v1/auth/invite below.
+    const user = await createUser(sql, email, password, { isAdmin: true });
     return c.json({ user: { id: user.id, email: user.email } }, 201);
   });
 
-  app.post("/api/v1/auth/invite", requireUser(sql), async (c) => {
+  // requireAdmin (after requireUser) closes M4: previously *any*
+  // authenticated user could invite -- i.e. create accounts and see the
+  // invitee's tempPassword -- with no role check at all.
+  app.post("/api/v1/auth/invite", requireUser(sql), requireAdmin(sql), async (c) => {
     const parsed = inviteSchema.safeParse(await parseJsonBody(c));
     if (!parsed.success) return c.json({ error: "invalid request" }, 400);
 
     const tempPassword = randomTempPassword();
-    const user = await createUser(sql, parsed.data.email, tempPassword);
-    return c.json({ user: { id: user.id, email: user.email }, tempPassword }, 201);
+    try {
+      const user = await createUser(sql, parsed.data.email, tempPassword);
+      return c.json({ user: { id: user.id, email: user.email }, tempPassword }, 201);
+    } catch (err) {
+      // Inviting an email that already exists hits users.email's unique
+      // constraint. Left uncaught, that surfaced as an unhandled 500 for a
+      // duplicate while a fresh email returned 201 -- a reliable oracle any
+      // logged-in user could use to test "is this email registered?". A
+      // generic 409 with no email-specific wording removes the signal.
+      if (isUniqueViolation(err)) return c.json({ error: "could not create user" }, 409);
+      throw err;
+    }
   });
 
   return app;

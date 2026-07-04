@@ -114,12 +114,24 @@ function startHub(): ChildProcess {
     env: {
       ...process.env,
       DATABASE_URL: DB_URL,
-      COOKIE_SECRET: "e2e-test-cookie-secret",
+      COOKIE_SECRET: "e2e-test-cookie-secret-at-least-32-characters",
       PUBLIC_URL: HUB_BASE_URL,
       PORT: String(HUB_PORT),
       MANDO_ADMIN_EMAIL: ADMIN_EMAIL,
       MANDO_ADMIN_PASSWORD: ADMIN_PASSWORD,
       MANDO_WEB_DIR: join(REPO_ROOT, "apps/web/dist"),
+      // The whole suite runs single-worker, serially, against one hub, and
+      // every spec's login()/pairing call shares the same client IP (see
+      // middleware/rate-limit.ts's clientIp() -- there's no proxy in front
+      // of this harness to set X-Forwarded-For, so it falls back to the
+      // real loopback connection address). That's legitimate traffic from
+      // one test client, not a flood, but it would still trip the
+      // production defaults (10 logins/min) partway through a run. Raise
+      // the maxes for this harness only -- production keeps the tight
+      // defaults.
+      MANDO_RATE_LIMIT_LOGIN_MAX: "1000",
+      MANDO_RATE_LIMIT_PAIRING_MAX: "1000",
+      MANDO_RATE_LIMIT_WS_AGENT_MAX: "1000",
     },
   });
 }
