@@ -26,12 +26,19 @@ describe("installCommand", () => {
     expect(existsSync(expectedPath)).toBe(true);
   });
 
-  it("contains the description frontmatter and the shell-injection line", () => {
+  it("contains the description frontmatter and the arg-free connect line", () => {
     const written = installCommand();
     const content = readFileSync(written, "utf-8");
 
     expect(content).toContain("description:");
-    expect(content).toContain("!`mando connect --opencode-auto --json $ARGUMENTS`");
+    expect(content).toContain("!`mando connect --opencode-auto --json`");
+  });
+
+  it("never interpolates $ARGUMENTS into the shell line (regression guard for the RCE fix)", () => {
+    const written = installCommand();
+    const content = readFileSync(written, "utf-8");
+
+    expect(content).not.toContain("$ARGUMENTS");
   });
 
   it("creates parent directories that do not yet exist", () => {

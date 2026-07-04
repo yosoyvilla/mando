@@ -9,7 +9,7 @@ import { join } from "node:path";
 const MANDO_COMMAND_TEMPLATE = `---
 description: Connect this machine to Mando remote control
 ---
-Report the result of connecting to Mando: !\`mando connect --opencode-auto --json $ARGUMENTS\`
+Report the result of connecting to Mando: !\`mando connect --opencode-auto --json\`
 `;
 
 // getOpencodeConfigDir resolves opencode's config directory. We honor

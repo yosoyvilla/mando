@@ -68,6 +68,25 @@ function isAborted(signal: AbortSignal | undefined): boolean {
   return signal?.aborted ?? false;
 }
 
+// resolveLocalTarget is the SSRF guard: `path` ultimately comes from the
+// hub, which forwards whatever a browser's request path resolved to (see
+// apps/hub/src/proxy/routes.ts). A `path` that doesn't start with "/", or
+// one containing an embedded userinfo/host (e.g. "@evil.com/x") or a
+// protocol-relative host ("//evil.com/x"), can make
+// `new URL(path, base)` resolve to a completely different origin than
+// `localBase` -- string-concatenating `${localBase}${path}` into fetch()
+// would then send this agent's Basic-auth credentials to that origin.
+// Returning `null` here means "refuse to fetch," independent of whatever
+// validation the hub does on its side (defense in depth: this must hold
+// even if a future hub regression reintroduces a bad path).
+function resolveLocalTarget(localBase: string, path: string): URL | null {
+  if (!path.startsWith("/")) return null;
+  const base = new URL(localBase);
+  const target = new URL(path, base);
+  if (target.origin !== base.origin) return null;
+  return target;
+}
+
 // forward turns one `http_request` frame into a local fetch against
 // opencode (at `localBase`) and streams the result back through `send` as
 // response_begin -> response_chunk* -> response_end, or response_error if
@@ -93,13 +112,30 @@ export async function forward(
     headers["Authorization"] = basicAuthHeader(opts.opencodePassword);
   }
 
+  const target = resolveLocalTarget(localBase, path);
+  if (!target) {
+    send({
+      type: "response_error",
+      id,
+      payload: { code: "fetch_failed", message: "invalid path" },
+    });
+    return;
+  }
+
   let response: Response;
   try {
-    response = await fetch(`${localBase}${path}`, {
+    response = await fetch(target, {
       method,
       headers,
       body: body ? Buffer.from(body, "base64") : undefined,
       signal: opts.signal,
+      // A redirect from the local opencode server (compromised or merely
+      // misconfigured) could otherwise bounce this same request -- headers,
+      // Basic-auth credentials and all -- to an arbitrary Location. Failing
+      // fast on any redirect keeps the SSRF guard above meaningful: it
+      // would be pointless to pin the initial fetch to `localBase`'s origin
+      // and then let the server itself redirect us elsewhere.
+      redirect: "error",
     });
   } catch (error) {
     const cancelled = isAborted(opts.signal);

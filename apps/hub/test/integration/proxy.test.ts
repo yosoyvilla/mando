@@ -326,6 +326,41 @@ test(
 );
 
 test(
+  // Regression test for the subPath-derivation vulnerability: Postgres's
+  // uuid cast accepts a 32-char hyphenless literal that still resolves to
+  // the same row as the canonical 36-char id (see requireMachineOwnership's
+  // `sql\`... where id = ${id}\``). The OLD implementation computed the
+  // proxy's subPath by slicing `c.req.path` at a length derived from
+  // `machine.id` (the DB's 36-char canonical form) -- 4 characters longer
+  // than what a hyphenless URL id actually occupies -- so the slice ate
+  // into "/ping" and produced a subPath that didn't start with "/". This
+  // proves the fix (deriving the tail from Hono's own route match instead
+  // of that length arithmetic) proxies correctly no matter which form of
+  // the id the URL uses.
+  "a 32-char hyphenless machine id in the URL still proxies to the correct subPath",
+  async () => {
+    const registry = new Registry();
+    const server = await startTestServer({ sql, config, registry });
+    const { cookie, machineId, agentWs } = await setUpOnlineMachine(server, "hyphenless");
+    const hyphenlessId = machineId.replace(/-/g, "");
+    expect(hyphenlessId).toHaveLength(32);
+
+    respondTo(agentWs, "/ping", { status: 200, chunks: ["pong"], end: true });
+
+    const res = await fetch(`${server.url}/api/v1/machines/${hyphenlessId}/opencode/ping`, {
+      headers: { Cookie: cookie },
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("pong");
+
+    agentWs.close();
+    server.stop();
+  },
+  FRAME_WAIT_MS * 2,
+);
+
+test(
   "offline machine returns 503 machine_offline",
   async () => {
     const registry = new Registry();

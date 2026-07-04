@@ -98,6 +98,40 @@ test("strips hop-by-hop/length headers from the agent's response before forwardi
   await res.text();
 });
 
+test("adds X-Content-Type-Options: nosniff to the streamed response, even if the agent didn't send one", async () => {
+  const { conn, sent, deliver } = fakeConn();
+
+  const resPromise = proxyRequest(conn, { method: "GET", path: "/ping", headers: {}, body: null });
+  const id = requestId(sent);
+
+  deliver({ type: "response_begin", id, payload: { status: 200, headers: { "content-type": "text/plain" } } });
+  const res = await resPromise;
+
+  expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+
+  deliver({ type: "response_end", id, payload: {} });
+  await res.text();
+});
+
+test("does not duplicate the header if the agent already sent its own X-Content-Type-Options", async () => {
+  const { conn, sent, deliver } = fakeConn();
+
+  const resPromise = proxyRequest(conn, { method: "GET", path: "/ping", headers: {}, body: null });
+  const id = requestId(sent);
+
+  deliver({
+    type: "response_begin",
+    id,
+    payload: { status: 200, headers: { "X-Content-Type-Options": "sniff-me-anyway" } },
+  });
+  const res = await resPromise;
+
+  expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+
+  deliver({ type: "response_end", id, payload: {} });
+  await res.text();
+});
+
 test("a response_error before response_begin resolves as a 502, never as a hung promise", async () => {
   const { conn, sent, deliver } = fakeConn();
 
