@@ -24,9 +24,11 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 // through this stream, and a stale/incorrect value can make Bun/undici
 // truncate or hang the browser's read of the body; `transfer-encoding` and
 // `connection` are hop-by-hop framing headers for the agent<->hub leg, not
-// the hub<->browser leg. Mirrors the request-side stripping in
+// the hub<->browser leg. `set-cookie` is excluded so a misbehaving agent or
+// the local opencode server it forwards for can never set cookies on the
+// hub's own origin. Mirrors the request-side stripping in
 // proxy/routes.ts's EXCLUDED_HEADERS.
-const EXCLUDED_RESPONSE_HEADERS = new Set(["content-length", "transfer-encoding", "connection"]);
+const EXCLUDED_RESPONSE_HEADERS = new Set(["content-length", "transfer-encoding", "connection", "set-cookie"]);
 
 function filterResponseHeaders(raw: Record<string, string>): Record<string, string> {
   const headers: Record<string, string> = {};
@@ -116,7 +118,29 @@ export function proxyRequest(conn: Conn, init: ProxyRequestInit, config: ProxyRe
             },
           });
 
-          resolve(new Response(stream, { status: frame.payload.status, headers: filterResponseHeaders(frame.payload.headers) }));
+          // frames.ts's ResponseBeginFrame schema already bounds status to
+          // 200-599, but `new Response(...)` throws a RangeError for any
+          // status outside that range -- guard defensively so a frame that
+          // somehow slips past parsing (or a future schema change) can
+          // never throw synchronously inside this onResponse handler,
+          // which would escape the message loop and hang the request
+          // instead of resolving/erroring it.
+          try {
+            resolve(
+              new Response(stream, { status: frame.payload.status, headers: filterResponseHeaders(frame.payload.headers) }),
+            );
+          } catch {
+            // The stream above was never handed to a consumer in this
+            // branch, so there's nothing to error/close beyond releasing
+            // our own bookkeeping.
+            cleanup();
+            resolve(
+              Response.json(
+                { error: "invalid_status", message: `agent returned an invalid HTTP status: ${frame.payload.status}` },
+                { status: 502 },
+              ),
+            );
+          }
           return;
         }
         case "response_chunk": {

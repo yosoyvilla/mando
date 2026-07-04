@@ -161,6 +161,41 @@ describe("connect (pairing flow)", () => {
     }
   });
 
+  it("reports a distinct message (not 'expired') when the poll sees approved without a token", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        if (req.method === "POST" && url.pathname === "/api/v1/pairing/request") {
+          return Response.json({ code: "LOST-TOKN", expiresAt: new Date(Date.now() + 60_000).toISOString() }, { status: 201 });
+        }
+        if (req.method === "GET" && url.pathname === "/api/v1/pairing/status") {
+          // Reports approved on every poll but never includes a token --
+          // simulates the token-bearing poll response being lost while a
+          // later poll still observes "approved" (the code was already
+          // consumed, so the hub can't mint a fresh token for it).
+          return Response.json({ status: "approved" }, { status: 200 });
+        }
+        return new Response("not found", { status: 404 });
+      },
+    });
+    const url = `http://localhost:${server.port}`;
+
+    try {
+      const result = await connect({ hub: url, pairingPollIntervalMs: 5, spawnDaemon: () => 1 });
+      expect(result.status).toBe("error");
+      if (result.status === "error") {
+        expect(result.message).toContain("token was not received");
+        expect(result.message).not.toContain("expired");
+      }
+
+      const config = readConfig();
+      expect(config).toBeNull();
+    } finally {
+      server.stop(true);
+    }
+  });
+
   it("skips pairing entirely when a token is already configured, going straight to detect+spawn", async () => {
     const { writeConfig } = await import("../../src/config");
     writeConfig({ hubUrl: "http://existing.invalid", token: "already-have-one", machineName: "known-machine" });

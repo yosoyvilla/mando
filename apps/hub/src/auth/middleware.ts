@@ -44,11 +44,15 @@ export function requireMachineOwnership(sql: Sql): MiddlewareHandler<{ Variables
     try {
       const rows = await sql`select * from machines where id = ${id}`;
       machine = rows[0] as Machine | undefined;
-    } catch {
+    } catch (error) {
       // Any DB error here (including a Postgres uuid-cast failure on a
       // malformed :id) must fold into the same 404 as a nonexistent
       // machine -- otherwise a malformed id would leak a 500 and let an
       // attacker distinguish "not valid" from "not yours"/"doesn't exist".
+      // Still log it (no secrets in this error -- just the DB driver's
+      // failure reason) so a transient DB outage shows up somewhere
+      // instead of silently looking like a wave of 404s.
+      console.error("requireMachineOwnership: machine lookup failed", error);
       return c.json({ error: "not found" }, 404);
     }
     const userId = c.get("userId");

@@ -18,7 +18,7 @@ services:
     build: { context: .., dockerfile: deploy/Dockerfile }
     environment:
       DATABASE_URL: postgres://mando:mando@postgres:5432/mando
-      COOKIE_SECRET: change-me
+      COOKIE_SECRET: change-me # dev only - set a strong random value before exposing this beyond localhost
       PUBLIC_URL: http://localhost:8080
       PORT: "8080"
       # Optional: bootstrap an admin user on first start.

@@ -130,6 +130,25 @@ test("a response_error after response_begin errors the stream instead of resolvi
   await expect(pendingRead).rejects.toThrow(/stream died/);
 });
 
+test("a response_begin with an out-of-range status (bypassing schema validation) resolves as a 502 instead of throwing", async () => {
+  const { conn, sent, deliver } = fakeConn();
+
+  const resPromise = proxyRequest(conn, { method: "GET", path: "/weird-status", headers: {}, body: null });
+  const id = requestId(sent);
+
+  // frames.ts's schema now rejects this before it ever reaches here (see
+  // packages/protocol/test/frames.test.ts), but proxy.ts must defend
+  // itself too -- `new Response(stream, { status })` throws a RangeError
+  // for anything outside 200-599, and that must never escape this
+  // onResponse handler and hang the request.
+  deliver({ type: "response_begin", id, payload: { status: 999, headers: {} } });
+
+  const res = await resPromise;
+  expect(res.status).toBe(502);
+  const body = await res.json();
+  expect(body.error).toBe("invalid_status");
+});
+
 test("times out with 504 if response_begin never arrives within timeoutMs", async () => {
   const { conn } = fakeConn();
 

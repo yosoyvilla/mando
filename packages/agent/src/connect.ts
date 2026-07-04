@@ -42,6 +42,16 @@ export type ConnectResult =
 type PairingRequestResponse = { code: string; expiresAt: string };
 type PairingStatusResponse = { status: "pending" | "approved"; token?: string };
 
+// Distinguishes *why* polling stopped without a token, so connect() can
+// report an accurate message instead of always saying "expired" -- see
+// pollUntilApproved's doc comment for why "approved without a token" is a
+// distinct, non-retryable-by-waiting outcome from "the deadline passed
+// while still pending".
+type PollOutcome =
+  | { status: "approved"; token: string }
+  | { status: "expired" }
+  | { status: "approved_without_token" };
+
 const DEFAULT_PAIRING_POLL_INTERVAL_MS = 2000;
 
 function printResult(json: boolean | undefined, payload: Record<string, unknown>, human: string): void {
@@ -71,28 +81,40 @@ async function requestPairing(
 }
 
 // Polls GET /api/v1/pairing/status until the pairing code is approved (in
-// which case the freshly-minted machine token is returned) or its
-// expiresAt deadline passes (in which case this returns null). A non-2xx,
-// non-410 response (a transient network/hub hiccup) is treated as "still
-// pending" rather than a hard failure -- one bad poll shouldn't abort an
-// otherwise-successful pairing the user is about to approve in the
-// browser.
+// which case the freshly-minted machine token is returned), the hub
+// reports it approved but WITHOUT a token, or its expiresAt deadline
+// passes. A non-2xx, non-410 response (a transient network/hub hiccup) is
+// treated as "still pending" rather than a hard failure -- one bad poll
+// shouldn't abort an otherwise-successful pairing the user is about to
+// approve in the browser.
+//
+// "approved without a token" stops polling immediately rather than
+// continuing until the deadline: once the hub reports the code as
+// approved, it will never mint a second token for it (pairing/service.ts
+// treats a code as consumed), so a token-less "approved" response means
+// the token was already handed out and lost in transit (e.g. this specific
+// poll response was dropped by the network) -- more polling cannot recover
+// it, and letting the loop run out the clock would misreport an actually-
+// successful pairing as "expired".
 async function pollUntilApproved(
   fetchFn: typeof fetch,
   hubUrl: string,
   code: string,
   expiresAt: string,
   pollIntervalMs: number,
-): Promise<string | null> {
+): Promise<PollOutcome> {
   const deadline = new Date(expiresAt).getTime();
 
   while (Date.now() < deadline) {
     const res = await fetchFn(`${hubUrl}/api/v1/pairing/status?code=${encodeURIComponent(code)}`);
-    if (res.status === 410) return null; // expired -- no point continuing to poll.
+    if (res.status === 410) return { status: "expired" }; // expired -- no point continuing to poll.
     if (res.ok) {
       try {
         const body = (await res.json()) as PairingStatusResponse;
-        if (body.status === "approved" && body.token) return body.token;
+        if (body.status === "approved") {
+          if (body.token) return { status: "approved", token: body.token };
+          return { status: "approved_without_token" };
+        }
       } catch {
         // Unparseable body on an otherwise-2xx poll -- treat as "still
         // pending" rather than letting a JSON parse error escape connect()
@@ -102,7 +124,7 @@ async function pollUntilApproved(
     await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
   }
 
-  return null;
+  return { status: "expired" };
 }
 
 // Spawns the detached daemon child (see daemon.ts) that owns the actual WS
@@ -185,14 +207,19 @@ export async function connect(opts: ConnectOpts = {}): Promise<ConnectResult> {
       `Pairing code: ${pairing.code}\nApprove this machine at: ${deepLink}\nWaiting for approval...`,
     );
 
-    const approvedToken = await pollUntilApproved(fetchFn, hubUrl, pairing.code, pairing.expiresAt, pollIntervalMs);
-    if (!approvedToken) {
+    const outcome = await pollUntilApproved(fetchFn, hubUrl, pairing.code, pairing.expiresAt, pollIntervalMs);
+    if (outcome.status === "approved_without_token") {
+      const message = "pairing was approved but the token was not received; re-run mando connect to try again";
+      printResult(opts.json, { status: "error", message }, `Error: ${message}`);
+      return { status: "error", message };
+    }
+    if (outcome.status === "expired") {
       const message = "pairing code expired before it was approved";
       printResult(opts.json, { status: "error", message }, `Error: ${message}`);
       return { status: "error", message };
     }
 
-    token = approvedToken;
+    token = outcome.token;
     writeConfig({ hubUrl, token, machineName });
   }
 
