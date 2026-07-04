@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+env:
+  TEST_DATABASE_URL: postgres://mando:mando@localhost:5432/mando
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: mando
+          POSTGRES_PASSWORD: mando
+          POSTGRES_DB: mando
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mando -d mando"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.13"
+
+      - name: Install workspace dependencies
+        run: bun install
+
+      - name: Install e2e dependencies
+        working-directory: e2e
+        run: bun install
+
+      - name: Typecheck workspaces
+        run: bun run typecheck
+
+      - name: Typecheck e2e
+        working-directory: e2e
+        run: bunx tsc --noEmit
+
+      - name: Unit and integration tests
+        run: bun run test
+
+      - name: Install Playwright browsers
+        working-directory: e2e
+        run: bunx playwright install --with-deps chromium
+
+      - name: E2E tests
+        working-directory: e2e
+        run: bunx playwright test
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            e2e/playwright-report
+            e2e/test-results
+          if-no-files-found: ignore
