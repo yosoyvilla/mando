@@ -181,10 +181,9 @@ test("bootstrap rejects a password shorter than 8 characters", async () => {
     body: JSON.stringify({ email: uniqueEmail("bootstrap-shortpw"), password: "short" }),
   });
 
-  // Already-initialized (409) or validation failure (400) are both
-  // acceptable here since the shared DB already has users; either way it
-  // must not be 201.
-  expect(res.status).not.toBe(201);
+  // Body validation runs before the "zero users" check, so this is 400
+  // regardless of how many users already exist in the shared DB.
+  expect(res.status).toBe(400);
 });
 
 test("invite requires an authenticated session", async () => {
