@@ -3,7 +3,7 @@ import { setCookie, deleteCookie, getCookie } from "hono/cookie";
 import { z } from "zod";
 import type postgres from "postgres";
 import { createUser, findUserByEmail, findUserById } from "./repo";
-import { verifySecret } from "../auth/password";
+import { verifySecret, DUMMY_HASH } from "../auth/password";
 import { createSession, destroySession } from "../auth/session";
 import { requireUser, type AuthVariables } from "../auth/middleware";
 
@@ -59,10 +59,14 @@ export function userRoutes(sql: Sql): Hono<{ Variables: AuthVariables }> {
     const { email, password } = parsed.data;
 
     const user = await findUserByEmail(sql, email);
-    // Verify against a hash even when the user doesn't exist so the
-    // response time doesn't leak whether the email was registered, and
-    // return the same generic message either way.
-    const ok = await verifySecret(password, user?.password_hash ?? "");
+    // Always run a full argon2 verify, even when the user doesn't exist,
+    // so the response time doesn't leak whether the email was
+    // registered. Falling back to "" here would let argon2 short-circuit
+    // on a malformed hash and return much faster than a real verify --
+    // DUMMY_HASH is a real argon2id hash so the verify does equivalent
+    // work either way. Return the same generic message either way too.
+    const hash = user?.password_hash ?? DUMMY_HASH;
+    const ok = await verifySecret(password, hash);
     if (!user || !ok) return c.json({ error: "invalid credentials" }, 401);
 
     const sessionId = await createSession(sql, user.id);
