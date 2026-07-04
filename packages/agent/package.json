@@ -8,7 +8,7 @@
   "scripts": {
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "build:binary": "bun build --compile src/index.ts --outfile dist/mando"
+    "build:binary": "bun run build.ts"
   },
   "dependencies": {
     "@mando/protocol": "workspace:*",

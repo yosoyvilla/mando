@@ -11,6 +11,15 @@ export const HelloFrame = z.object({
     machineName: z.string().min(1),
     opencodePort: z.number().int().positive(),
     agentVersion: z.string(),
+    // Optional (not required) so an old agent build that predates protocol
+    // versioning still parses cleanly here -- the hub branches on its
+    // absence to send a clean version_mismatch error instead of this
+    // schema rejecting the frame outright (which the hub's onMessage
+    // handler treats as silent malformed-frame noise, dropping the
+    // connection with no explanation). See @mando/protocol's
+    // PROTOCOL_VERSION (version.ts) and apps/hub/src/tunnel/ws.ts's
+    // handleHello.
+    protocolVersion: z.number().int().optional(),
   }),
 });
 

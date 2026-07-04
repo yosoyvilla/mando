@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
-import { parseFrame, serializeFrame, type Frame } from "@mando/protocol";
+import { parseFrame, serializeFrame, PROTOCOL_VERSION, type Frame } from "@mando/protocol";
 import { readConfig } from "./config";
 import { nextDelay as defaultNextDelay } from "./reconnect";
 import { checkHealth as defaultCheckHealth } from "./opencode";
@@ -90,6 +90,50 @@ export function writeLastSeen(path: string, at: Date = new Date()): void {
   writeFileSync(path, JSON.stringify({ lastSeenAt: at.toISOString() } satisfies DaemonState), "utf-8");
 }
 
+// Tiny on-disk record of the last fatal (non-retryable) hub ErrorFrame this
+// daemon received -- e.g. version_mismatch or unauthorized. The daemon runs
+// fully detached with its stdio discarded (see connect.ts's
+// defaultSpawnDaemon), so printing to console isn't enough to surface a
+// same-tick-fast rejection back to a `mando connect` invocation still
+// running in the foreground; this file is the channel connect() polls
+// instead (see connect.ts). Also read by status() for later inspection.
+export interface DaemonFatalError {
+  code: string;
+  message: string;
+  at: string;
+}
+
+export function defaultErrorFilePath(): string {
+  return process.env.MANDO_ERROR_FILE ?? join(homedir(), ".mando-error.json");
+}
+
+export function readLastError(path: string): DaemonFatalError | null {
+  if (!existsSync(path)) return null;
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf-8"));
+    return typeof parsed?.code === "string" && typeof parsed?.message === "string"
+      ? { code: parsed.code, message: parsed.message, at: typeof parsed.at === "string" ? parsed.at : "" }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeLastError(path: string, error: { code: string; message: string }): void {
+  const parentDir = dirname(path);
+  if (!existsSync(parentDir)) mkdirSync(parentDir, { recursive: true });
+  const record: DaemonFatalError = { ...error, at: new Date().toISOString() };
+  writeFileSync(path, JSON.stringify(record), "utf-8");
+}
+
+export function clearLastError(path: string): void {
+  try {
+    unlinkSync(path);
+  } catch {
+    // Already gone -- fine, nothing to clear.
+  }
+}
+
 // The subset of the WebSocket client interface the daemon loop actually
 // uses. `WebSocket` (Bun's global, spec-shaped client) satisfies this
 // structurally, so the real default (`(url) => new WebSocket(url)`) needs
@@ -119,6 +163,7 @@ export interface DaemonOptions {
   opencodePassword?: string;
   pidFile?: string;
   stateFile?: string;
+  errorFile?: string;
   // All of the below are injection points for tests -- so the message
   // loop, reconnect backoff, and health polling can be driven
   // deterministically and fast, without a real socket, real opencode
@@ -158,6 +203,7 @@ export async function runDaemon(opts: DaemonOptions): Promise<void> {
     opencodePassword,
     pidFile = defaultPidFilePath(),
     stateFile = defaultStateFilePath(),
+    errorFile = defaultErrorFilePath(),
     wsFactory = (url: string) => new WebSocket(url),
     nextDelay = defaultNextDelay,
     checkHealth = defaultCheckHealth,
@@ -168,6 +214,10 @@ export async function runDaemon(opts: DaemonOptions): Promise<void> {
   } = opts;
 
   writePidFile(pidFile, process.pid);
+  // A fresh daemon run has no fatal error yet -- clear any stale record a
+  // previous run left behind so connect()'s post-spawn check (see
+  // connect.ts) never reports an old failure as if it were this run's.
+  clearLastError(errorFile);
 
   let stopped = false;
   let attempt = 0;
@@ -243,7 +293,7 @@ export async function runDaemon(opts: DaemonOptions): Promise<void> {
           serializeFrame({
             type: "hello",
             id: crypto.randomUUID(),
-            payload: { token, machineName, opencodePort, agentVersion },
+            payload: { token, machineName, opencodePort, agentVersion, protocolVersion: PROTOCOL_VERSION },
           }),
         );
       });
@@ -267,10 +317,15 @@ export async function runDaemon(opts: DaemonOptions): Promise<void> {
             onEvent({ type: "registered", machineId: frame.payload.machineId });
             return;
           case "error":
-            // The hub only ever sends this for hello_timeout/unauthorized
-            // (see apps/hub/src/tunnel/ws.ts) -- both are unrecoverable by
-            // reconnecting with the same token, so stop rather than loop
-            // forever hammering the hub with the same bad credentials.
+            // The hub only ever sends this for hello_timeout/unauthorized/
+            // version_mismatch (see apps/hub/src/tunnel/ws.ts) -- all three
+            // are unrecoverable by reconnecting with the same token/agent
+            // build, so stop rather than loop forever hammering the hub
+            // with the same bad credentials or incompatible version.
+            // Persisted to disk (not just onEvent) because the real
+            // detached daemon's stdio is discarded -- see connect.ts's
+            // defaultSpawnDaemon and its post-spawn check.
+            writeLastError(errorFile, { code: frame.payload.code, message: frame.payload.message });
             onEvent({ type: "hub_error", code: frame.payload.code, message: frame.payload.message });
             finish(`hub_error:${frame.payload.code}`);
             return;
@@ -347,6 +402,18 @@ if (import.meta.main) {
       machineName: config.machineName,
       opencodePort,
       opencodePassword: process.env.MANDO_OPENCODE_PASSWORD,
+      // Without this, a fatal hub rejection (version_mismatch,
+      // unauthorized, hello_timeout) was silently swallowed here: runDaemon
+      // defaults `onEvent` to a no-op, so nothing was ever printed for
+      // whoever is watching this process's own stderr (e.g. it run in the
+      // foreground for debugging, not through connect()'s detached spawn
+      // with stdio discarded -- that path relies on the error file instead,
+      // see connect.ts).
+      onEvent: (event) => {
+        if (event.type === "hub_error") {
+          console.error(`mando daemon: ${event.message}`);
+        }
+      },
       signal: controller.signal,
     });
 

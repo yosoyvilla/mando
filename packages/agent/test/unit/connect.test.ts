@@ -16,6 +16,11 @@ beforeEach(() => {
   // guard) on every call -- pin it to a per-test tmp path so these tests
   // never read/depend on a real ~/.mando-pid left over on the host.
   process.env.MANDO_PID_FILE = join(configDir, "pid");
+  // connect()'s post-spawn fatal-error check (see connect.ts) also reads a
+  // disk file by default -- pin it to a per-test tmp path for the same
+  // reason as MANDO_PID_FILE above, so these tests never depend on (or
+  // pollute) a real ~/.mando-error.json left over on the host.
+  process.env.MANDO_ERROR_FILE = join(configDir, "error.json");
   logs = [];
   originalConsoleLog = console.log;
   console.log = (...args: unknown[]) => {
@@ -27,6 +32,7 @@ afterEach(() => {
   console.log = originalConsoleLog;
   delete process.env.MANDO_CONFIG;
   delete process.env.MANDO_PID_FILE;
+  delete process.env.MANDO_ERROR_FILE;
   if (configDir) rmSync(configDir, { recursive: true, force: true });
   configDir = null;
 });
@@ -261,6 +267,55 @@ describe("connect (pairing flow)", () => {
       alreadyRunning: true,
     });
     expect(spawnCalls).toEqual([4097]); // still only the one spawn call from the first connect()
+  });
+
+  it("reports an error instead of connected when the daemon writes a fatal error within the post-spawn grace window", async () => {
+    const { writeConfig } = await import("../../src/config");
+    writeConfig({ hubUrl: "http://existing.invalid", token: "already-have-one", machineName: "known-machine" });
+
+    const errorFile = join(configDir!, "custom-error.json");
+    const result = await connect({
+      opencodePort: 4097,
+      errorFile,
+      postSpawnGraceMs: 5,
+      spawnDaemon: (port) => {
+        // Simulates the real daemon (see daemon.ts's runDaemon) hitting an
+        // immediate fatal hub rejection -- e.g. version_mismatch -- and
+        // persisting it to errorFile before connect()'s grace window
+        // elapses, since its stdio is discarded and this file is the only
+        // channel available to report back.
+        writeFileSync(
+          errorFile,
+          JSON.stringify({
+            code: "version_mismatch",
+            message: "agent protocol v0 is incompatible with hub protocol v1; upgrade mando",
+            at: new Date().toISOString(),
+          }),
+          "utf-8",
+        );
+        return 999999;
+      },
+    });
+
+    expect(result.status).toBe("error");
+    if (result.status === "error") {
+      expect(result.message).toContain("incompatible");
+    }
+    expect(logs.some((l) => l.includes("Connected as"))).toBe(false);
+  });
+
+  it("reports connected as usual when no fatal error appears within the grace window", async () => {
+    const { writeConfig } = await import("../../src/config");
+    writeConfig({ hubUrl: "http://existing.invalid", token: "already-have-one", machineName: "known-machine" });
+
+    const result = await connect({
+      opencodePort: 4097,
+      errorFile: join(configDir!, "unused-error.json"),
+      postSpawnGraceMs: 5,
+      spawnDaemon: () => 999998,
+    });
+
+    expect(result).toEqual({ status: "connected", machine: "known-machine", uiUrl: "http://existing.invalid" });
   });
 
   it("spawns again when the pidfile is stale (its pid is no longer alive)", async () => {

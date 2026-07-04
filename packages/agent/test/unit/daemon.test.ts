@@ -87,6 +87,18 @@ function newPidFile(): string {
   return join(tmpDir, "pid");
 }
 
+// runDaemon() defaults errorFile to a real ~/.mando-error.json (see
+// daemon.ts's defaultErrorFilePath) and unconditionally clears it on
+// every run -- every test below must override it to a tmp path in the
+// same tmpDir newPidFile() just created, or it would delete/write to
+// that real file on the host running these tests. Call this right after
+// (or in the same object literal as, since JS evaluates properties in
+// source order) the matching newPidFile()/pidFile so it picks up the
+// right tmpDir.
+function newErrorFile(): string {
+  return join(tmpDir!, "error.json");
+}
+
 describe("runDaemon", () => {
   it("sends hello on open, dispatches ping->pong once registered, and writes a pidfile", async () => {
     const sockets: FakeSocket[] = [];
@@ -100,6 +112,7 @@ describe("runDaemon", () => {
       machineName: "machine-1",
       opencodePort: 4096,
       pidFile,
+      errorFile: newErrorFile(),
       wsFactory: () => {
         const socket = new FakeSocket();
         sockets.push(socket);
@@ -153,6 +166,7 @@ describe("runDaemon", () => {
       machineName: "machine-2",
       opencodePort,
       pidFile: newPidFile(),
+      errorFile: newErrorFile(),
       wsFactory: () => {
         const socket = new FakeSocket();
         sockets.push(socket);
@@ -207,6 +221,7 @@ describe("runDaemon", () => {
       machineName: "machine-3",
       opencodePort,
       pidFile: newPidFile(),
+      errorFile: newErrorFile(),
       wsFactory: () => {
         const socket = new FakeSocket();
         sockets.push(socket);
@@ -265,6 +280,7 @@ describe("runDaemon", () => {
       machineName: "machine-drop",
       opencodePort,
       pidFile: newPidFile(),
+      errorFile: newErrorFile(),
       wsFactory: () => {
         const socket = new FakeSocket();
         sockets.push(socket);
@@ -312,6 +328,7 @@ describe("runDaemon", () => {
       machineName: "machine-lastseen",
       opencodePort: 4096,
       pidFile,
+      errorFile: newErrorFile(),
       stateFile,
       wsFactory: () => {
         const socket = new FakeSocket();
@@ -353,6 +370,7 @@ describe("runDaemon", () => {
       machineName: "machine-4",
       opencodePort: 4096,
       pidFile: newPidFile(),
+      errorFile: newErrorFile(),
       wsFactory: () => {
         const socket = new FakeSocket();
         sockets.push(socket);
@@ -397,6 +415,7 @@ describe("runDaemon", () => {
       machineName: "machine-5",
       opencodePort: 4096,
       pidFile,
+      errorFile: newErrorFile(),
       wsFactory: () => {
         const socket = new FakeSocket();
         sockets.push(socket);
@@ -417,6 +436,49 @@ describe("runDaemon", () => {
     expect(existsSync(pidFile)).toBe(false);
   });
 
+  it("does not reconnect after a version_mismatch error, and persists it to the error file", async () => {
+    const sockets: FakeSocket[] = [];
+    const events: DaemonEvent[] = [];
+    const pidFile = newPidFile();
+    const errorFile = newErrorFile();
+
+    const daemonPromise = runDaemon({
+      hubUrl: "http://hub.invalid",
+      token: "tok-vmismatch",
+      machineName: "machine-vmismatch",
+      opencodePort: 4096,
+      pidFile,
+      errorFile,
+      wsFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+      checkHealth: async () => true,
+      healthCheckIntervalMs: 1_000_000,
+      onEvent: (e) => events.push(e),
+    });
+
+    sockets[0]!.triggerOpen();
+    sockets[0]!.triggerMessage({
+      type: "error",
+      id: "hello-vmismatch",
+      payload: { code: "version_mismatch", message: "agent protocol v0 is incompatible with hub protocol v1; upgrade mando" },
+    });
+
+    await daemonPromise; // should resolve on its own -- no signal needed.
+
+    expect(sockets).toHaveLength(1); // never reconnected.
+    expect(events.some((e) => e.type === "hub_error" && e.code === "version_mismatch")).toBe(true);
+    expect(events.some((e) => e.type === "stopped" && e.reason === "hub_error:version_mismatch")).toBe(true);
+    expect(existsSync(pidFile)).toBe(false);
+
+    expect(existsSync(errorFile)).toBe(true);
+    const persisted = JSON.parse(readFileSync(errorFile, "utf-8"));
+    expect(persisted.code).toBe("version_mismatch");
+    expect(persisted.message).toContain("incompatible");
+  });
+
   it("stops after maxConsecutiveHealthFailures consecutive failed local-opencode health checks", async () => {
     const sockets: FakeSocket[] = [];
     const events: DaemonEvent[] = [];
@@ -428,6 +490,7 @@ describe("runDaemon", () => {
       machineName: "machine-6",
       opencodePort: 4096,
       pidFile,
+      errorFile: newErrorFile(),
       wsFactory: () => {
         const socket = new FakeSocket();
         sockets.push(socket);

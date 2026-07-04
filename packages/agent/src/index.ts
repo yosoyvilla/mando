@@ -5,6 +5,7 @@ export * from "./forward";
 export * from "./connect";
 export * from "./daemon";
 export * from "./install-command";
+export * from "./version";
 
 import { readConfig } from "./config";
 import { connect, printResult, type ConnectOpts, type ConnectResult } from "./connect";
@@ -17,6 +18,7 @@ import {
   removePidFile,
 } from "./daemon";
 import { installCommand } from "./install-command";
+import { VERSION } from "./version";
 
 export type DisconnectResult =
   | { status: "disconnected" }
@@ -59,6 +61,7 @@ export function disconnect(opts: { json?: boolean } = {}): DisconnectResult {
 }
 
 export interface StatusResult {
+  version: string;
   configured: boolean;
   hubUrl?: string;
   machineName?: string;
@@ -81,6 +84,7 @@ export function status(opts: { json?: boolean } = {}): StatusResult {
   const state = readStateFile(defaultStateFilePath());
 
   const result: StatusResult = {
+    version: VERSION,
     configured: config !== null,
     hubUrl: config?.hubUrl,
     machineName: config?.machineName,
@@ -91,8 +95,8 @@ export function status(opts: { json?: boolean } = {}): StatusResult {
   };
 
   const human = config
-    ? `Machine: ${config.machineName}\nHub: ${config.hubUrl}\nToken: ${result.hasToken ? "present" : "missing"}\nDaemon: ${daemonRunning ? `running (pid ${pid})` : "not running"}\nLast seen: ${result.lastSeenAt ?? "never"}`
-    : `Not configured. Run \`mando connect\` first.`;
+    ? `Version: ${VERSION}\nMachine: ${config.machineName}\nHub: ${config.hubUrl}\nToken: ${result.hasToken ? "present" : "missing"}\nDaemon: ${daemonRunning ? `running (pid ${pid})` : "not running"}\nLast seen: ${result.lastSeenAt ?? "never"}`
+    : `Version: ${VERSION}\nNot configured. Run \`mando connect\` first.`;
   printResult(opts.json, result as unknown as Record<string, unknown>, human);
 
   return result;
@@ -131,6 +135,16 @@ async function main(): Promise<void> {
   const opts = parseArgs(rest);
 
   switch (command) {
+    case "--version":
+    case "-v":
+    case "version": {
+      if (opts.json) {
+        console.log(JSON.stringify({ version: VERSION }));
+      } else {
+        console.log(VERSION);
+      }
+      return;
+    }
     case "connect": {
       const result: ConnectResult = await connect(opts);
       process.exitCode = result.status === "error" ? 1 : 0;
@@ -151,7 +165,7 @@ async function main(): Promise<void> {
       return;
     }
     default: {
-      console.error("Usage: mando <connect|disconnect|status|install-command> [--json] [--hub <url>] [--opencode-port <port>] [--opencode-auto]");
+      console.error("Usage: mando <connect|disconnect|status|install-command|version> [--json] [--hub <url>] [--opencode-port <port>] [--opencode-auto]");
       process.exitCode = command ? 1 : 0;
       return;
     }

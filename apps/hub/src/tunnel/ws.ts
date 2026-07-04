@@ -1,6 +1,6 @@
 import { createBunWebSocket } from "hono/bun";
 import type postgres from "postgres";
-import { parseFrame, serializeFrame, type Frame } from "@mando/protocol";
+import { parseFrame, serializeFrame, PROTOCOL_VERSION, type Frame } from "@mando/protocol";
 import { findMachineByToken } from "../machines/repo";
 import type { Registry, Conn } from "./registry";
 
@@ -111,6 +111,30 @@ export function tunnelWsHandler(deps: TunnelWsDeps) {
       if (helloTimer) {
         clearTimeout(helloTimer);
         helloTimer = null;
+      }
+
+      // Version check first, before the token check: it's a cheap
+      // in-memory comparison (no DB round trip / argon2 verify), so
+      // rejecting an incompatible agent here avoids wasting that work on a
+      // connection the hub is going to refuse anyway. A missing
+      // protocolVersion means an old agent build that predates versioning
+      // -- treated the same as a mismatched major, since the hub has no
+      // way to know it's actually compatible. Either way this is a
+      // non-retryable rejection (mirrors the unauthorized path below):
+      // reconnecting with the same agent binary will hit the exact same
+      // mismatch again.
+      const agentProtocolVersion = frame.payload.protocolVersion;
+      if (agentProtocolVersion === undefined || agentProtocolVersion !== PROTOCOL_VERSION) {
+        ws.send(
+          serializeFrame(
+            errorFrame(
+              "version_mismatch",
+              `agent protocol v${agentProtocolVersion ?? "unknown"} is incompatible with hub protocol v${PROTOCOL_VERSION}; upgrade mando`,
+            ),
+          ),
+        );
+        ws.close(1008, "version mismatch");
+        return;
       }
 
       // findMachineByToken already scopes to non-revoked tokens on

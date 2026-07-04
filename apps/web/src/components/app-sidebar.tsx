@@ -44,6 +44,7 @@ import {
   SidebarRail,
   SidebarSection,
   SidebarSectionGroup,
+  useSidebar,
 } from "@/components/ui/sidebar";
 import {
   useSessions,
@@ -55,7 +56,7 @@ import {
 } from "@/hooks/use-opencode";
 import { useMachineStore } from "@/stores/machine-store";
 import { useAuth } from "@/contexts/auth-context";
-import { useNavigate, useMatch } from "@tanstack/react-router";
+import { useNavigate, useMatch, useLocation } from "@tanstack/react-router";
 import type { Session } from "@opencode-ai/sdk/v2";
 import type { Machine } from "@/lib/hub-client";
 
@@ -160,6 +161,8 @@ export default function AppSidebar(
 ) {
   const [creating, setCreating] = useState(false);
   const navigate = useNavigate();
+  const location = useLocation();
+  const { setIsOpenOnMobile } = useSidebar();
   const selectedMachine = useSelectedMachine();
   const { user, logout } = useAuth();
   const identityLabel = user?.email ?? "Account";
@@ -167,6 +170,17 @@ export default function AppSidebar(
   const createSession = useCreateSession();
   const deleteSession = useDeleteSession();
   const sessions: Session[] = sessionsData ?? [];
+
+  // On phone, the sidebar renders as a Sheet drawer (see ui/sidebar.tsx's
+  // isMobile branch) that only ever opens/closes via the hamburger trigger
+  // -- nothing closes it after a navigation. Recon (Feature A) found that
+  // creating or opening a session leaves the drawer open on top of the
+  // chat, blocking the composer entirely. Closing on every route change
+  // covers all navigation paths (session links, New Session, Diff) without
+  // touching desktop, where `isOpenOnMobile` is inert.
+  useEffect(() => {
+    setIsOpenOnMobile(false);
+  }, [location.pathname, setIsOpenOnMobile]);
 
   const { data: diffData } = useGitDiff();
   const diffFileCount = useMemo(() => {
