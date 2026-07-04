@@ -156,32 +156,41 @@ export function AppSidebarNav() {
         <Button
           size="xs"
           intent="outline"
+          aria-label={isPulling ? "Pulling..." : "Pull"}
           className="uppercase font-mono"
           onPress={handlePull}
           isDisabled={isLoading || !sessionId}
         >
           <ArrowDownCircleIcon size="14px" />
-          {isPulling ? "Pulling..." : "Pull"}
+          <span className="hidden sm:inline">
+            {isPulling ? "Pulling..." : "Pull"}
+          </span>
         </Button>
         <Button
           size="xs"
           intent="outline"
+          aria-label={isPushing ? "Pushing..." : "Push"}
           className="uppercase font-mono"
           onPress={handlePush}
           isDisabled={isLoading || !sessionId}
         >
           <ArrowUpCircleIcon size="14px" />
-          {isPushing ? "Pushing..." : "Push"}
+          <span className="hidden sm:inline">
+            {isPushing ? "Pushing..." : "Push"}
+          </span>
         </Button>
         <Button
           size="xs"
           intent="outline"
+          aria-label={isCreatingPR ? "Creating PR..." : "Create PR"}
           className="uppercase font-mono"
           onPress={handleCreatePR}
           isDisabled={isLoading || !sessionId}
         >
           <IconGitPullRequest size="14px" />
-          {isCreatingPR ? "Creating..." : "Create PR"}
+          <span className="hidden sm:inline">
+            {isCreatingPR ? "Creating..." : "Create PR"}
+          </span>
         </Button>
       </span>
     </SidebarNav>
