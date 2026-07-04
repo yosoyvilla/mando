@@ -167,7 +167,17 @@ export default async function globalSetup(_config: FullConfig): Promise<() => Pr
 
     writeFileSync(
       REAL_HANDOFF_STATE_FILE,
-      JSON.stringify({ hubBaseUrl: HUB_BASE_URL, machineId, opencodePort: opencode.port, terminalSessionId }, null, 2),
+      JSON.stringify(
+        {
+          hubBaseUrl: HUB_BASE_URL,
+          machineId,
+          machineName: REAL_MACHINE_NAME,
+          opencodePort: opencode.port,
+          terminalSessionId,
+        },
+        null,
+        2,
+      ),
     );
     console.error(
       `[real-handoff] terminal session ${terminalSessionId} created on real opencode :${opencode.port}, machine ${machineId} online`,

@@ -30,6 +30,10 @@ export const REAL_HANDOFF_STATE_FILE = join(tmpdir(), "mando-real-opencode-hando
 export interface RealHandoffState {
   hubBaseUrl: string;
   machineId: string;
+  // The hub-issued machine name, so the browser handoff test can select
+  // this exact machine in the UI's machine picker (rather than relying
+  // solely on the app's auto-select-first-online heuristic).
+  machineName: string;
   opencodePort: number;
   // A session created by talking to opencode DIRECTLY (the "terminal"
   // client), before the machine came online -- the thing the handoff test

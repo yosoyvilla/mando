@@ -115,3 +115,105 @@ test.describe("real opencode session handoff", () => {
       .toBe(true);
   });
 });
+
+// Broader proof that the core opencode surface the UI depends on works
+// against the REAL server (not just the stub), all exercised through the
+// same hub proxy the browser uses. These are the read/create paths behind
+// the sidebar's session list, the agent/model pickers, and the live event
+// stream -- if any of them behaved differently on real opencode than on the
+// stub, the UI would silently break in production while the stub suite
+// stayed green.
+test.describe("real opencode core surface via the hub proxy", () => {
+  let cookie: string;
+  let state: RealHandoffState;
+
+  test.beforeAll(async () => {
+    state = loadState();
+    cookie = await loginForCookie(state.hubBaseUrl, ADMIN_EMAIL, ADMIN_PASSWORD);
+  });
+
+  // Creating a session through the proxy (POST /api/session) is the exact
+  // path the sidebar's "New Session" button drives; the created id must then
+  // be visible in the proxied global session list.
+  test("a session created via the proxy appears in the proxied session list", async ({ request }) => {
+    const createRes = await request.post(
+      `${state.hubBaseUrl}/api/v1/machines/${state.machineId}/opencode/api/session`,
+      { headers: { cookie, "content-type": "application/json" }, data: {} },
+    );
+    expect(createRes.ok(), `POST .../api/session should be 2xx, got ${createRes.status()}`).toBeTruthy();
+    const created = (await createRes.json()) as { data: { id: string } };
+    expect(created.data?.id, "create session response should carry an id").toBeTruthy();
+
+    const listRes = await request.get(
+      `${state.hubBaseUrl}/api/v1/machines/${state.machineId}/opencode/api/session`,
+      { headers: { cookie } },
+    );
+    expect(listRes.ok(), `GET .../api/session should be 2xx, got ${listRes.status()}`).toBeTruthy();
+    const list = (await listRes.json()) as { data: Array<{ id: string }> };
+    expect(list.data.map((s) => s.id), "newly created session should appear in the list").toContain(
+      created.data.id,
+    );
+  });
+
+  // The agent picker (agent-select.tsx) reads the legacy flat `/agent`
+  // catalog -- real opencode ships built-in agents, so it must be non-empty.
+  test("GET /agent returns a non-empty agent list", async ({ request }) => {
+    const res = await request.get(
+      `${state.hubBaseUrl}/api/v1/machines/${state.machineId}/opencode/agent`,
+      { headers: { cookie } },
+    );
+    expect(res.ok(), `GET .../agent should be 2xx, got ${res.status()}`).toBeTruthy();
+    const agents = (await res.json()) as Array<{ name: string }>;
+    expect(Array.isArray(agents), "agent catalog should be an array").toBeTruthy();
+    expect(agents.length, "real opencode should ship built-in agents").toBeGreaterThan(0);
+  });
+
+  // The model picker (model-select.tsx via useProviders) reads the legacy
+  // `/config/providers` path (there is no /api/config/providers on real
+  // opencode 1.17.13 -- see use-opencode.ts). Assert it returns the
+  // `{ providers: [...] }` shape the UI expects.
+  test("GET /config/providers returns a providers catalog", async ({ request }) => {
+    const res = await request.get(
+      `${state.hubBaseUrl}/api/v1/machines/${state.machineId}/opencode/config/providers`,
+      { headers: { cookie } },
+    );
+    expect(res.ok(), `GET .../config/providers should be 2xx, got ${res.status()}`).toBeTruthy();
+    const body = (await res.json()) as { providers: unknown[] };
+    expect(Array.isArray(body.providers), "providers payload should carry a providers array").toBeTruthy();
+  });
+
+  // The live SSE stream (use-opencode-events.ts opens `/api/event`) is what
+  // keeps the session list and message view fresh. Prove a frame actually
+  // flows through the proxy by reading the stream until opencode's opening
+  // `server.connected` event arrives, then aborting.
+  test("GET /api/event streams the opening server.connected frame via the proxy", async () => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10_000);
+    try {
+      const res = await fetch(
+        `${state.hubBaseUrl}/api/v1/machines/${state.machineId}/opencode/api/event`,
+        { headers: { cookie, accept: "text/event-stream" }, signal: controller.signal },
+      );
+      expect(res.ok, `GET .../api/event should be 2xx, got ${res.status}`).toBeTruthy();
+      expect(res.body, "event stream should expose a readable body").toBeTruthy();
+
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let sawConnected = false;
+      // Read chunks until the first SSE frame carrying server.connected
+      // lands (it is the first event real opencode emits on connect).
+      while (!sawConnected) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        if (buffer.includes("server.connected")) sawConnected = true;
+      }
+      await reader.cancel().catch(() => {});
+      expect(sawConnected, "the proxied event stream should deliver server.connected").toBe(true);
+    } finally {
+      clearTimeout(timer);
+      controller.abort();
+    }
+  });
+});

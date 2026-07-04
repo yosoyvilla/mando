@@ -1,11 +1,12 @@
 import { defineConfig, devices } from "@playwright/test";
 import { HUB_BASE_URL } from "./harness-config";
 
-// GATED config for the real-opencode handoff test. The DEFAULT
+// GATED config for the real-opencode handoff tests. The DEFAULT
 // `bunx playwright test` uses playwright.config.ts, which ignores
-// real-opencode-handoff.spec.ts (see its testIgnore) -- so the 16 stub
+// **/real-opencode-*.spec.ts (see its testIgnore) -- so the 16 stub
 // tests stay fast and deterministic and never require the opencode binary.
-// This config runs ONLY that one spec, against a real `opencode serve`
+// This config runs ONLY the real-opencode specs (the API-level handoff spec
+// and the browser-driven handoff spec), against a real `opencode serve`
 // booted by global-setup-real.ts:
 //
 //   cd e2e && bunx playwright test --config playwright.real.config.ts
@@ -14,7 +15,7 @@ import { HUB_BASE_URL } from "./harness-config";
 // out to `bun` for the hub/agent/seed subprocesses), hence `bunx`.
 export default defineConfig({
   testDir: "./tests",
-  testMatch: "**/real-opencode-handoff.spec.ts",
+  testMatch: "**/real-opencode-*.spec.ts",
   // A little longer than the default: booting a real opencode server and
   // waiting for the async user-message recording is slower than the stub.
   timeout: 45_000,
