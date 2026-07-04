@@ -69,6 +69,19 @@ export class PairingError extends Error {
 // between approve and poll loses the handoff and the user re-pairs.
 const pendingTokens = new Map<string, string>();
 
+// Drops any pendingTokens entries for the given pairing codes. Has no TTL
+// of its own -- retention.ts's runRetention() is the sole caller, driven
+// by the pairing_requests rows it just deleted (expired or consumed), so a
+// code only gets swept here once the durable row backing it is already
+// gone. Returns the count actually removed, for retention.ts's summary log.
+export function sweepPendingTokens(codes: string[]): number {
+  let removed = 0;
+  for (const code of codes) {
+    if (pendingTokens.delete(code)) removed++;
+  }
+  return removed;
+}
+
 export async function createPairingRequest(
   sql: Sql,
   input: { machineName: string; platform?: string | null },

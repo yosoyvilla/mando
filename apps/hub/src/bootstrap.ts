@@ -1,6 +1,7 @@
 import type postgres from "postgres";
 import type { Config } from "./config";
 import { createUser, findUserByEmail } from "./users/repo";
+import { logAudit } from "./audit";
 
 type Sql = ReturnType<typeof postgres>;
 
@@ -28,7 +29,10 @@ export async function bootstrapAdmin(sql: Sql, config: Config): Promise<void> {
   }
 
   try {
-    await createUser(sql, config.adminEmail, config.adminPassword, { isAdmin: true });
+    const admin = await createUser(sql, config.adminEmail, config.adminPassword, { isAdmin: true });
+    // No IP here -- this runs at process startup, not inside an HTTP
+    // request, so there's no client to attribute it to.
+    await logAudit(sql, { eventType: "bootstrap_admin", actorUserId: admin.id });
   } catch (err) {
     // Unique constraint race: something else (a concurrent boot, or the
     // HTTP bootstrap endpoint) created this exact email between our check

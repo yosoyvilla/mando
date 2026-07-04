@@ -3,6 +3,8 @@ import { z } from "zod";
 import type postgres from "postgres";
 import { approvePairing, createPairingRequest, pollPairing, PairingError, type PairingErrorReason } from "./service";
 import { requireUser, type AuthVariables } from "../auth/middleware";
+import { logAudit } from "../audit";
+import { clientIp } from "../middleware/rate-limit";
 
 type Sql = ReturnType<typeof postgres>;
 
@@ -70,6 +72,12 @@ export function pairingRoutes(sql: Sql): Hono<{ Variables: AuthVariables }> {
       // to the agent via GET /pairing/status, never to the approving
       // browser session.
       const { machineId } = await approvePairing(sql, c.get("userId"), parsed.data.code);
+      await logAudit(sql, {
+        eventType: "pairing_approved",
+        actorUserId: c.get("userId"),
+        target: machineId,
+        ip: clientIp(c),
+      });
       return c.json({ machineId }, 200);
     } catch (err) {
       if (err instanceof PairingError) return c.json({ error: err.reason }, statusForPairingError(err.reason));

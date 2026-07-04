@@ -39,7 +39,10 @@ type Bucket = {
 // the X-Forwarded-For header and everything else collapses into a single
 // "unknown" bucket -- an acceptable loss of precision for a best-effort,
 // single-replica limiter.
-function clientIp(c: Context): string {
+// Exported so audit.ts can capture the same best-effort client IP on
+// audit-logged actions (login, invite, revoke, deletion, ...) without
+// duplicating the XFF-vs-getConnInfo fallback logic.
+export function clientIp(c: Context): string {
   const forwarded = c.req.header("x-forwarded-for");
   const first = forwarded?.split(",")[0]?.trim();
   if (first) return first;

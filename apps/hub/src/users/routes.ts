@@ -2,10 +2,14 @@ import { Hono, type Context } from "hono";
 import { setCookie, deleteCookie, getCookie } from "hono/cookie";
 import { z } from "zod";
 import type postgres from "postgres";
-import { createUser, findUserByEmail, findUserById } from "./repo";
+import { createUser, deleteUser, findUserByEmail, findUserById } from "./repo";
 import { verifySecret, DUMMY_HASH } from "../auth/password";
-import { createSession, destroySession } from "../auth/session";
+import { createSession, destroySession, readSession } from "../auth/session";
 import { requireUser, requireAdmin, type AuthVariables } from "../auth/middleware";
+import { listMachines } from "../machines/repo";
+import type { Registry } from "../tunnel/registry";
+import { logAudit } from "../audit";
+import { clientIp } from "../middleware/rate-limit";
 
 type Sql = ReturnType<typeof postgres>;
 
@@ -56,7 +60,24 @@ function setSessionCookie(c: Context, sessionId: string): void {
   });
 }
 
-export function userRoutes(sql: Sql): Hono<{ Variables: AuthVariables }> {
+// Closes any live tunnel for each of the given user's machines and drops
+// them from the registry -- remove-then-close, matching
+// machines/routes.ts's revoke handler, so a concurrent request can't
+// observe a not-yet-removed conn during the async socket teardown that the
+// WS handler's own onClose would otherwise do. Must run before the user
+// row is deleted: listMachines needs the machines rows, which the
+// subsequent cascade delete removes.
+async function closeUserTunnels(sql: Sql, registry: Registry, userId: string): Promise<void> {
+  const machines = await listMachines(sql, userId);
+  for (const machine of machines) {
+    const conn = registry.get(machine.id);
+    if (!conn) continue;
+    registry.remove(machine.id);
+    conn.close();
+  }
+}
+
+export function userRoutes(sql: Sql, registry: Registry): Hono<{ Variables: AuthVariables }> {
   const app = new Hono<{ Variables: AuthVariables }>();
 
   app.post("/api/v1/auth/login", async (c) => {
@@ -73,17 +94,67 @@ export function userRoutes(sql: Sql): Hono<{ Variables: AuthVariables }> {
     // work either way. Return the same generic message either way too.
     const hash = user?.password_hash ?? DUMMY_HASH;
     const ok = await verifySecret(password, hash);
-    if (!user || !ok) return c.json({ error: "invalid credentials" }, 401);
+    if (!user || !ok) {
+      // No target/email here -- logging the attempted email would let the
+      // audit trail itself become a PII/enumeration surface. Just the
+      // event type and IP.
+      await logAudit(sql, { eventType: "login_failure", ip: clientIp(c) });
+      return c.json({ error: "invalid credentials" }, 401);
+    }
 
     const sessionId = await createSession(sql, user.id);
     setSessionCookie(c, sessionId);
+    await logAudit(sql, { eventType: "login_success", actorUserId: user.id, ip: clientIp(c) });
     return c.json({ user: { id: user.id, email: user.email } }, 200);
   });
 
   app.post("/api/v1/auth/logout", async (c) => {
     const sessionId = getCookie(c, SESSION_COOKIE);
-    if (sessionId) await destroySession(sql, sessionId);
+    if (sessionId) {
+      const session = await readSession(sql, sessionId);
+      await destroySession(sql, sessionId);
+      if (session) await logAudit(sql, { eventType: "logout", actorUserId: session.userId, ip: clientIp(c) });
+    }
     deleteCookie(c, SESSION_COOKIE, { path: "/" });
+    return c.json({ ok: true }, 200);
+  });
+
+  // Right to erasure (GDPR Art.17 / CCPA deletion): the caller erases
+  // their own account. Order matters: tunnels must close on live machines
+  // (which still exist) before deleteUser's cascade removes them, and the
+  // audit write must happen *before* deleteUser, not after -- audit_log's
+  // actor_user_id has a real FK to users(id) (ON DELETE SET NULL only
+  // governs what happens to an *existing* row when its referenced user is
+  // later deleted; it does not let a fresh insert reference a user id that
+  // is already gone). Logging first, while the row still exists, is what
+  // lets that same row's actor later go to null on deletion instead of the
+  // insert itself failing the FK check.
+  app.delete("/api/v1/me", requireUser(sql), async (c) => {
+    const userId = c.get("userId");
+    await closeUserTunnels(sql, registry, userId);
+    await logAudit(sql, { eventType: "user_deleted_self", actorUserId: userId, ip: clientIp(c) });
+    await deleteUser(sql, userId);
+    deleteCookie(c, SESSION_COOKIE, { path: "/" });
+    return c.json({ ok: true }, 200);
+  });
+
+  // Admin erasure of another user by id. requireAdmin gates this the same
+  // way it gates invite below. 404s (rather than a generic error) when
+  // deleteUser finds no matching row -- covers both "never existed" and
+  // "already deleted" with the same response, avoiding a distinct signal
+  // for either.
+  app.delete("/api/v1/users/:id", requireUser(sql), requireAdmin(sql), async (c) => {
+    const targetId = c.req.param("id");
+    await closeUserTunnels(sql, registry, targetId);
+    const deleted = await deleteUser(sql, targetId);
+    if (!deleted) return c.json({ error: "not found" }, 404);
+
+    await logAudit(sql, {
+      eventType: "user_deleted_by_admin",
+      actorUserId: c.get("userId"),
+      target: targetId,
+      ip: clientIp(c),
+    });
     return c.json({ ok: true }, 200);
   });
 
@@ -105,6 +176,7 @@ export function userRoutes(sql: Sql): Hono<{ Variables: AuthVariables }> {
     // way is the bootstrap admin -- give it is_admin so it can actually use
     // the admin-gated /api/v1/auth/invite below.
     const user = await createUser(sql, email, password, { isAdmin: true });
+    await logAudit(sql, { eventType: "bootstrap_admin", actorUserId: user.id, ip: clientIp(c) });
     return c.json({ user: { id: user.id, email: user.email } }, 201);
   });
 
@@ -118,6 +190,12 @@ export function userRoutes(sql: Sql): Hono<{ Variables: AuthVariables }> {
     const tempPassword = randomTempPassword();
     try {
       const user = await createUser(sql, parsed.data.email, tempPassword);
+      await logAudit(sql, {
+        eventType: "invite",
+        actorUserId: c.get("userId"),
+        target: user.id,
+        ip: clientIp(c),
+      });
       return c.json({ user: { id: user.id, email: user.email }, tempPassword }, 201);
     } catch (err) {
       // Inviting an email that already exists hits users.email's unique

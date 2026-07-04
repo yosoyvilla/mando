@@ -4,6 +4,9 @@ import { runMigrations } from "./db/migrate";
 import { buildApp, websocket, type AppDeps } from "./app";
 import { bootstrapAdmin } from "./bootstrap";
 import { DEFAULT_RATE_LIMITS } from "./middleware/rate-limit";
+import { runRetention } from "./retention";
+
+const DEFAULT_RETENTION_INTERVAL_MS = 60 * 60 * 1000; // hourly
 
 // Maps Config's optional MANDO_RATE_LIMIT_*_MAX env overrides onto
 // buildApp's rateLimits deps, keeping DEFAULT_RATE_LIMITS' window sizes and
@@ -34,6 +37,17 @@ if (import.meta.main) {
 
   await runMigrations(sql);
   await bootstrapAdmin(sql, config);
+
+  // Data-minimization sweep (retention.ts): run once at startup, then on a
+  // recurring interval. `.unref()` keeps the timer from holding the event
+  // loop open, so it never blocks a graceful shutdown the way a normal
+  // setInterval handle would.
+  await runRetention(sql);
+  const retentionIntervalMs = config.retentionIntervalMs ?? DEFAULT_RETENTION_INTERVAL_MS;
+  const retentionTimer = setInterval(() => {
+    runRetention(sql).catch((err) => console.error("retention: sweep failed", err));
+  }, retentionIntervalMs);
+  retentionTimer.unref();
 
   const app = buildApp({ sql, config, rateLimits: rateLimitsFromConfig(config) });
   const server = Bun.serve({ port: config.port, fetch: app.fetch, websocket });

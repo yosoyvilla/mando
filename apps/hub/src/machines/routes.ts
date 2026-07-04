@@ -3,6 +3,8 @@ import type postgres from "postgres";
 import { requireUser, requireMachineOwnership, type AuthVariables, type Machine } from "../auth/middleware";
 import { listMachines, revokeMachine } from "./repo";
 import type { Registry } from "../tunnel/registry";
+import { logAudit } from "../audit";
+import { clientIp } from "../middleware/rate-limit";
 
 type Sql = ReturnType<typeof postgres>;
 
@@ -48,6 +50,13 @@ export function machineRoutes(sql: Sql, registry: Registry): Hono<{ Variables: A
       registry.remove(machine.id);
       conn.close();
     }
+
+    await logAudit(sql, {
+      eventType: "machine_revoked",
+      actorUserId: c.get("userId"),
+      target: machine.id,
+      ip: clientIp(c),
+    });
 
     return c.json({ ok: true }, 200);
   });
