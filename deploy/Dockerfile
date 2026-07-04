@@ -7,9 +7,9 @@
 # @mando/protocol) and to satisfy the frozen lockfile.
 #
 # Pinned to the exact Bun version this repo develops against
-# (see package.json "packageManager": "bun@1.3.13") for reproducible builds.
+# (see package.json "packageManager": "bun@1.3.14") for reproducible builds.
 
-ARG BUN_VERSION=1.3.13
+ARG BUN_VERSION=1.3.14
 
 ########################################
 # 1. builder -- install deps, build web SPA
