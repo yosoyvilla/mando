@@ -2,7 +2,6 @@
 
 # Dependencies
 node_modules
-.opencode
 
 # Local env files
 .env
@@ -34,4 +33,14 @@ yarn-error.log*
 *.pem
 .mando-pid
 .superpowers/
-.claude/agent-context/
+
+# Agent / editor tooling (managed via AGENTS.md, not committed)
+.claude/
+.cursor/
+.cursorrules
+.windsurf/
+.aider*
+.opencode/
+
+# Internal working docs (specs, plans) -- not part of the published repo
+docs/
