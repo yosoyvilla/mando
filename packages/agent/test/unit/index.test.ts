@@ -3,26 +3,31 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { disconnect, status } from "../../src/index";
-import { writePidFile } from "../../src/daemon";
+import { writeLastSeen, writePidFile } from "../../src/daemon";
 
 let tmpDir: string | null = null;
 let pidFile: string | null = null;
+let stateFile: string | null = null;
 let child: ReturnType<typeof Bun.spawn> | null = null;
 
 beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), "mando-index-test-"));
   pidFile = join(tmpDir, "pid");
+  stateFile = join(tmpDir, "state.json");
   process.env.MANDO_PID_FILE = pidFile;
+  process.env.MANDO_STATE_FILE = stateFile;
 });
 
 afterEach(() => {
   child?.kill();
   child = null;
   delete process.env.MANDO_PID_FILE;
+  delete process.env.MANDO_STATE_FILE;
   delete process.env.MANDO_CONFIG;
   if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
   tmpDir = null;
   pidFile = null;
+  stateFile = null;
 });
 
 function isAlive(pid: number): boolean {
@@ -83,5 +88,20 @@ describe("status", () => {
     const result = status();
     expect(result.daemonRunning).toBe(true);
     expect(result.pid).toBe(child.pid);
+  });
+
+  it("surfaces lastSeenAt from the daemon's state file", () => {
+    process.env.MANDO_CONFIG = join(tmpDir!, "no-such-config.json");
+    writeLastSeen(stateFile!, new Date("2026-01-01T00:00:00.000Z"));
+
+    const result = status();
+    expect(result.lastSeenAt).toBe("2026-01-01T00:00:00.000Z");
+  });
+
+  it("reports lastSeenAt as undefined when no state file exists yet", () => {
+    process.env.MANDO_CONFIG = join(tmpDir!, "no-such-config.json");
+
+    const result = status();
+    expect(result.lastSeenAt).toBeUndefined();
   });
 });

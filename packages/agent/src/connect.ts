@@ -85,8 +85,14 @@ async function pollUntilApproved(
     const res = await fetchFn(`${hubUrl}/api/v1/pairing/status?code=${encodeURIComponent(code)}`);
     if (res.status === 410) return null; // expired -- no point continuing to poll.
     if (res.ok) {
-      const body = (await res.json()) as PairingStatusResponse;
-      if (body.status === "approved" && body.token) return body.token;
+      try {
+        const body = (await res.json()) as PairingStatusResponse;
+        if (body.status === "approved" && body.token) return body.token;
+      } catch {
+        // Unparseable body on an otherwise-2xx poll -- treat as "still
+        // pending" rather than letting a JSON parse error escape connect()
+        // as an unhandled rejection over a transient hub hiccup.
+      }
     }
     await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
   }

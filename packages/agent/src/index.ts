@@ -7,7 +7,7 @@ export * from "./daemon";
 
 import { readConfig } from "./config";
 import { connect, printResult, type ConnectOpts, type ConnectResult } from "./connect";
-import { defaultPidFilePath, readPidFile, removePidFile } from "./daemon";
+import { defaultPidFilePath, defaultStateFilePath, readPidFile, readStateFile, removePidFile } from "./daemon";
 
 export type DisconnectResult =
   | { status: "disconnected" }
@@ -69,17 +69,20 @@ export interface StatusResult {
   hasToken: boolean;
   daemonRunning: boolean;
   pid?: number;
+  lastSeenAt?: string;
 }
 
-// status() reports what's on disk (config, pidfile) without touching the
-// network -- it's meant to answer "is this machine set up to connect, and
-// is the daemon currently alive" for `mando status` / the shell-injection
-// prompt, not "is the hub currently reachable".
+// status() reports what's on disk (config, pidfile, last-seen state file)
+// without touching the network -- it's meant to answer "is this machine
+// set up to connect, is the daemon currently alive, and when did it last
+// check in" for `mando status` / the shell-injection prompt, not "is the
+// hub currently reachable".
 export function status(opts: { json?: boolean } = {}): StatusResult {
   const config = readConfig();
   const pidFile = defaultPidFilePath();
   const pid = readPidFile(pidFile);
   const daemonRunning = pid !== null && isProcessAlive(pid);
+  const state = readStateFile(defaultStateFilePath());
 
   const result: StatusResult = {
     configured: config !== null,
@@ -88,10 +91,11 @@ export function status(opts: { json?: boolean } = {}): StatusResult {
     hasToken: Boolean(config?.token),
     daemonRunning,
     pid: daemonRunning ? (pid ?? undefined) : undefined,
+    lastSeenAt: state?.lastSeenAt,
   };
 
   const human = config
-    ? `Machine: ${config.machineName}\nHub: ${config.hubUrl}\nToken: ${result.hasToken ? "present" : "missing"}\nDaemon: ${daemonRunning ? `running (pid ${pid})` : "not running"}`
+    ? `Machine: ${config.machineName}\nHub: ${config.hubUrl}\nToken: ${result.hasToken ? "present" : "missing"}\nDaemon: ${daemonRunning ? `running (pid ${pid})` : "not running"}\nLast seen: ${result.lastSeenAt ?? "never"}`
     : `Not configured. Run \`mando connect\` first.`;
   printResult(opts.json, result as unknown as Record<string, unknown>, human);
 
