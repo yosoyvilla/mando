@@ -9,12 +9,12 @@ import {
   ArrowUpCircleIcon,
   IconGitPullRequest,
 } from "@/components/icons/lucide";
-import { useInstanceStore } from "@/stores/instance-store";
+import { useMachineStore } from "@/stores/machine-store";
 import { useModelStore } from "@/stores/model-store";
 import { useBreadcrumb } from "@/contexts/breadcrumb-context";
 import { mutateSessionMessages } from "@/hooks/use-session-messages";
-import { useSessions } from "@/hooks/use-opencode";
-import { backendBasePath } from "@/lib/backend-url";
+import { useSelectedMachine, useSessions } from "@/hooks/use-opencode";
+import { opencodeJson } from "@/lib/opencode-fetch";
 
 const CREATE_PR_PROMPT = `Use gh CLI to create a pull request. Follow these steps:
 
@@ -63,10 +63,8 @@ Make sure to:
 - Report the result of the push operation`;
 
 export function AppSidebarNav() {
-  const instance = useInstanceStore((s) => s.instance);
-  const port = instance?.port ?? 0;
-  const provider = instance?.provider;
-  const apiBase = port ? backendBasePath(provider, port) : "";
+  const machineId = useMachineStore((s) => s.selectedMachineId);
+  const selectedMachine = useSelectedMachine();
   const { pageTitle } = useBreadcrumb();
   const selectedModel = useModelStore((s) => s.selectedModel);
   const { mutate: mutateSessions } = useSessions();
@@ -82,14 +80,13 @@ export function AppSidebarNav() {
   const sessionId = sessionMatch?.params?.id;
 
   const sendPrompt = async (prompt: string) => {
-    if (!sessionId || !port) {
+    if (!sessionId || !machineId) {
       toast.error("Please open a session first");
       return;
     }
 
-    const response = await fetch(`${apiBase}/session/${sessionId}/prompt`, {
+    await opencodeJson(machineId, `/session/${sessionId}/prompt`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         text: prompt,
         model:
@@ -99,11 +96,7 @@ export function AppSidebarNav() {
       }),
     });
 
-    if (!response.ok) {
-      throw new Error("Failed to send request");
-    }
-
-    mutateSessionMessages(port, sessionId, provider);
+    mutateSessionMessages(machineId, sessionId);
     mutateSessions();
   };
 
@@ -154,7 +147,7 @@ export function AppSidebarNav() {
         <SidebarTrigger className="-ml-2" />
         <Breadcrumbs className="hidden md:flex">
           <BreadcrumbsItem href="/">
-            {instance?.name ?? "Instance"}
+            {selectedMachine?.name ?? "Machine"}
           </BreadcrumbsItem>
           {pageTitle && <BreadcrumbsItem>{pageTitle}</BreadcrumbsItem>}
         </Breadcrumbs>

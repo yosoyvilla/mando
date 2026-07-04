@@ -9,7 +9,9 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as InstancesRouteImport } from './routes/instances'
+import { Route as PairRouteImport } from './routes/pair'
+import { Route as MachinesRouteImport } from './routes/machines'
+import { Route as LoginRouteImport } from './routes/login'
 import { Route as AboutRouteImport } from './routes/about'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
@@ -17,9 +19,19 @@ import { Route as AppSettingsRouteImport } from './routes/_app/settings'
 import { Route as AppDiffRouteImport } from './routes/_app/diff'
 import { Route as AppSessionIdRouteImport } from './routes/_app/session/$id'
 
-const InstancesRoute = InstancesRouteImport.update({
-  id: '/instances',
-  path: '/instances',
+const PairRoute = PairRouteImport.update({
+  id: '/pair',
+  path: '/pair',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MachinesRoute = MachinesRouteImport.update({
+  id: '/machines',
+  path: '/machines',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LoginRoute = LoginRouteImport.update({
+  id: '/login',
+  path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AboutRoute = AboutRouteImport.update({
@@ -55,14 +67,18 @@ const AppSessionIdRoute = AppSessionIdRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
   '/about': typeof AboutRoute
-  '/instances': typeof InstancesRoute
+  '/login': typeof LoginRoute
+  '/machines': typeof MachinesRoute
+  '/pair': typeof PairRoute
   '/diff': typeof AppDiffRoute
   '/settings': typeof AppSettingsRoute
   '/session/$id': typeof AppSessionIdRoute
 }
 export interface FileRoutesByTo {
   '/about': typeof AboutRoute
-  '/instances': typeof InstancesRoute
+  '/login': typeof LoginRoute
+  '/machines': typeof MachinesRoute
+  '/pair': typeof PairRoute
   '/diff': typeof AppDiffRoute
   '/settings': typeof AppSettingsRoute
   '/': typeof AppIndexRoute
@@ -72,7 +88,9 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_app': typeof AppRouteWithChildren
   '/about': typeof AboutRoute
-  '/instances': typeof InstancesRoute
+  '/login': typeof LoginRoute
+  '/machines': typeof MachinesRoute
+  '/pair': typeof PairRoute
   '/_app/diff': typeof AppDiffRoute
   '/_app/settings': typeof AppSettingsRoute
   '/_app/': typeof AppIndexRoute
@@ -81,14 +99,31 @@ export interface FileRoutesById {
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
-    '/' | '/about' | '/instances' | '/diff' | '/settings' | '/session/$id'
+    | '/'
+    | '/about'
+    | '/login'
+    | '/machines'
+    | '/pair'
+    | '/diff'
+    | '/settings'
+    | '/session/$id'
   fileRoutesByTo: FileRoutesByTo
-  to: '/about' | '/instances' | '/diff' | '/settings' | '/' | '/session/$id'
+  to:
+    | '/about'
+    | '/login'
+    | '/machines'
+    | '/pair'
+    | '/diff'
+    | '/settings'
+    | '/'
+    | '/session/$id'
   id:
     | '__root__'
     | '/_app'
     | '/about'
-    | '/instances'
+    | '/login'
+    | '/machines'
+    | '/pair'
     | '/_app/diff'
     | '/_app/settings'
     | '/_app/'
@@ -98,16 +133,32 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   AppRoute: typeof AppRouteWithChildren
   AboutRoute: typeof AboutRoute
-  InstancesRoute: typeof InstancesRoute
+  LoginRoute: typeof LoginRoute
+  MachinesRoute: typeof MachinesRoute
+  PairRoute: typeof PairRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/instances': {
-      id: '/instances'
-      path: '/instances'
-      fullPath: '/instances'
-      preLoaderRoute: typeof InstancesRouteImport
+    '/pair': {
+      id: '/pair'
+      path: '/pair'
+      fullPath: '/pair'
+      preLoaderRoute: typeof PairRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/machines': {
+      id: '/machines'
+      path: '/machines'
+      fullPath: '/machines'
+      preLoaderRoute: typeof MachinesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/about': {
@@ -174,7 +225,9 @@ const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
 const rootRouteChildren: RootRouteChildren = {
   AppRoute: AppRouteWithChildren,
   AboutRoute: AboutRoute,
-  InstancesRoute: InstancesRoute,
+  LoginRoute: LoginRoute,
+  MachinesRoute: MachinesRoute,
+  PairRoute: PairRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

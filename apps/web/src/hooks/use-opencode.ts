@@ -1,62 +1,51 @@
 import useSWR from "swr";
-import { useInstanceStore } from "@/stores/instance-store";
-import { backendBasePath } from "@/lib/backend-url";
+import { useMachineStore } from "@/stores/machine-store";
+import { opencodeJson } from "@/lib/opencode-fetch";
+import { hubClient as defaultHubClient } from "@/lib/hub-client-instance";
+import type { HubClient, Machine } from "@/lib/hub-client";
 import type { SessionStatus } from "@opencode-ai/sdk/v2";
 
-const fetcher = async (url: string) => {
-  const res = await fetch(url);
-  if (!res.ok) {
-    throw new Error(`Request failed: ${res.status}`);
-  }
-  return res.json();
-};
-
 function useBackend() {
-  const instance = useInstanceStore((s) => s.instance);
-  return instance
-    ? {
-        port: instance.port,
-        basePath: backendBasePath(instance.provider, instance.port),
-      }
-    : null;
+  const machineId = useMachineStore((s) => s.selectedMachineId);
+  return machineId ? { machineId } : null;
 }
 
-export function useInstances() {
-  return useSWR("/api/instances", fetcher, {
+// `path` is the same relative opencode-wrapper path the old local-mode
+// server used under `/api/{provider}/{port}` -- only the transport (hub
+// proxy for the selected machine, instead of a direct same-origin fetch)
+// changed. Untyped (matches the old fetcher's implicit `res.json(): any`)
+// so each `useSWR<T>` call site can pin its own response shape.
+function fetcher([machineId, path]: readonly [string, string]): Promise<any> {
+  return opencodeJson(machineId, path);
+}
+
+export function useMachines(client: HubClient = defaultHubClient) {
+  return useSWR<Machine[]>("hub/machines", () => client.listMachines(), {
     refreshInterval: 5_000,
     revalidateOnFocus: true,
   });
 }
 
+// Combines the selected-machine id (stored in `useMachineStore`) with the
+// live machine list so callers get the current name/online status without
+// re-deriving it themselves.
+export function useSelectedMachine() {
+  const machineId = useMachineStore((s) => s.selectedMachineId);
+  const { data: machines } = useMachines();
+  return machines?.find((machine) => machine.id === machineId) ?? null;
+}
+
 export function useSessions() {
   const backend = useBackend();
 
-  return useSWR(backend ? `${backend.basePath}/sessions` : null, fetcher);
-}
-
-export function useSession(id: string | null) {
-  const backend = useBackend();
-
-  return useSWR(
-    backend && id ? `${backend.basePath}/session/${id}` : null,
-    fetcher,
-  );
-}
-
-export function useSessionMessages(id: string | null) {
-  const backend = useBackend();
-
-  return useSWR(
-    backend && id ? `${backend.basePath}/session/${id}/messages` : null,
-    fetcher,
-  );
+  return useSWR(backend ? [backend.machineId, "/sessions"] as const : null, fetcher);
 }
 
 export function useSessionStatuses() {
   const backend = useBackend();
 
   return useSWR<Record<string, SessionStatus>>(
-    backend ? `${backend.basePath}/session/status` : null,
+    backend ? ([backend.machineId, "/session/status"] as const) : null,
     fetcher,
     {
       revalidateOnFocus: false,
@@ -68,78 +57,40 @@ export function useSessionStatuses() {
   );
 }
 
-export function useConfig() {
-  const backend = useBackend();
-
-  return useSWR(backend ? `${backend.basePath}/config` : null, fetcher);
-}
-
 export function useProviders() {
   const backend = useBackend();
 
-  return useSWR(backend ? `${backend.basePath}/providers` : null, fetcher);
+  return useSWR(backend ? ([backend.machineId, "/providers"] as const) : null, fetcher);
 }
 
 export function useAgents() {
   const backend = useBackend();
 
-  return useSWR(backend ? `${backend.basePath}/agents` : null, fetcher);
-}
-
-export function useHealth() {
-  const backend = useBackend();
-
-  return useSWR(backend ? `${backend.basePath}/health` : null, fetcher);
-}
-
-export function useCurrentProject() {
-  const backend = useBackend();
-
-  return useSWR(
-    backend ? `${backend.basePath}/project/current` : null,
-    fetcher,
-  );
-}
-
-export function useHostname() {
-  return useSWR("/api/system/hostname", fetcher);
+  return useSWR(backend ? ([backend.machineId, "/agents"] as const) : null, fetcher);
 }
 
 export function useCreateSession() {
   const backend = useBackend();
 
-  return async (title?: string) => {
-    if (!backend) throw new Error("No instance selected");
+  return async (title?: string): Promise<any> => {
+    if (!backend) throw new Error("No machine selected");
 
-    const res = await fetch(`${backend.basePath}/session/create`, {
+    return opencodeJson(backend.machineId, "/session/create", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ title }),
     });
-
-    if (!res.ok) {
-      throw new Error(`Failed to create session: ${res.status}`);
-    }
-
-    return res.json();
   };
 }
 
 export function useDeleteSession() {
   const backend = useBackend();
 
-  return async (sessionId: string) => {
-    if (!backend) throw new Error("No instance selected");
+  return async (sessionId: string): Promise<any> => {
+    if (!backend) throw new Error("No machine selected");
 
-    const res = await fetch(`${backend.basePath}/session/${sessionId}`, {
+    return opencodeJson(backend.machineId, `/session/${sessionId}`, {
       method: "DELETE",
     });
-
-    if (!res.ok) {
-      throw new Error(`Failed to delete session: ${res.status}`);
-    }
-
-    return res.json();
   };
 }
 
@@ -147,7 +98,7 @@ export function useGitDiff() {
   const backend = useBackend();
 
   return useSWR<{ diff: string; worktree: string }>(
-    backend ? `${backend.basePath}/git/diff` : null,
+    backend ? ([backend.machineId, "/git/diff"] as const) : null,
     fetcher,
   );
 }
@@ -155,7 +106,7 @@ export function useGitDiff() {
 export function usePermissions() {
   const backend = useBackend();
 
-  return useSWR(backend ? `${backend.basePath}/permissions` : null, fetcher);
+  return useSWR(backend ? ([backend.machineId, "/permissions"] as const) : null, fetcher);
 }
 
 export function useReplyPermission() {
@@ -165,87 +116,56 @@ export function useReplyPermission() {
     requestId: string,
     reply: "once" | "always" | "reject",
     message?: string,
-  ) => {
-    if (!backend) throw new Error("No instance selected");
+  ): Promise<any> => {
+    if (!backend) throw new Error("No machine selected");
 
-    const res = await fetch(
-      `${backend.basePath}/permission/${requestId}/reply`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reply, message }),
-      },
+    return opencodeJson(
+      backend.machineId,
+      `/permission/${requestId}/reply`,
+      { method: "POST", body: JSON.stringify({ reply, message }) },
     );
-
-    if (!res.ok) {
-      throw new Error(`Failed to reply to permission: ${res.status}`);
-    }
-
-    return res.json();
   };
 }
 
 export function useQuestions() {
   const backend = useBackend();
 
-  return useSWR(backend ? `${backend.basePath}/questions` : null, fetcher);
+  return useSWR(backend ? ([backend.machineId, "/questions"] as const) : null, fetcher);
 }
 
 export function useReplyQuestion() {
   const backend = useBackend();
 
-  return async (requestId: string, answers: string[][]) => {
-    if (!backend) throw new Error("No instance selected");
+  return async (requestId: string, answers: string[][]): Promise<any> => {
+    if (!backend) throw new Error("No machine selected");
 
-    const res = await fetch(`${backend.basePath}/question/${requestId}/reply`, {
+    return opencodeJson(backend.machineId, `/question/${requestId}/reply`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ answers }),
     });
-
-    if (!res.ok) {
-      throw new Error(`Failed to reply to question: ${res.status}`);
-    }
-
-    return res.json();
   };
 }
 
 export function useRejectQuestion() {
   const backend = useBackend();
 
-  return async (requestId: string) => {
-    if (!backend) throw new Error("No instance selected");
+  return async (requestId: string): Promise<any> => {
+    if (!backend) throw new Error("No machine selected");
 
-    const res = await fetch(
-      `${backend.basePath}/question/${requestId}/reject`,
-      {
-        method: "POST",
-      },
-    );
-
-    if (!res.ok) {
-      throw new Error(`Failed to reject question: ${res.status}`);
-    }
-
-    return res.json();
+    return opencodeJson(backend.machineId, `/question/${requestId}/reject`, {
+      method: "POST",
+    });
   };
 }
 
 export function useAbortSession() {
   const backend = useBackend();
 
-  return async (sessionId: string) => {
-    if (!backend) throw new Error("No instance selected");
+  return async (sessionId: string): Promise<any> => {
+    if (!backend) throw new Error("No machine selected");
 
-    const res = await fetch(`${backend.basePath}/session/${sessionId}/abort`, {
+    return opencodeJson(backend.machineId, `/session/${sessionId}/abort`, {
       method: "POST",
     });
-
-    if (!res.ok) {
-      throw new Error(`Failed to abort session: ${res.status}`);
-    }
-
-    return res.json();
   };
 }
