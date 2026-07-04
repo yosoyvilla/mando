@@ -8,6 +8,11 @@ import { HUB_BASE_URL } from "./harness-config";
 // runtime, not Node.
 export default defineConfig({
   testDir: "./tests",
+  // The real-opencode handoff test requires a live `opencode serve` binary
+  // and its own global-setup (see playwright.real.config.ts). Keep it out
+  // of the default suite so `bunx playwright test` stays fast, hermetic,
+  // and independent of whether opencode is installed.
+  testIgnore: "**/real-opencode-handoff.spec.ts",
   timeout: 30_000,
   fullyParallel: false,
   // The harness boots exactly one hub + one seeded machine; concurrent
