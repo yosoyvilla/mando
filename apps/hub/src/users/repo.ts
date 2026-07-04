@@ -14,3 +14,8 @@ export async function findUserByEmail(sql: Sql, email: string) {
   const rows = await sql`select id, email, password_hash from users where email = ${email}`;
   return rows[0] ?? null;
 }
+
+export async function findUserById(sql: Sql, id: string): Promise<User | null> {
+  const rows = await sql`select id, email from users where id = ${id}`;
+  return (rows[0] as User) ?? null;
+}
