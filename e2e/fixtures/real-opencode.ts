@@ -80,8 +80,21 @@ export async function startRealOpencode(): Promise<RealOpencode> {
   const proc: ChildProcess = spawn(
     bin,
     ["serve", "--port", String(port), "--hostname", "127.0.0.1"],
-    { cwd, stdio: "inherit" },
+    { cwd, stdio: ["ignore", "pipe", "pipe"] },
   );
+
+  // Capture opencode's own stdout/stderr (bounded tail). With stdio:inherit
+  // a hung/crashed `serve` in CI just times out on /doc with no explanation;
+  // echoing the output and folding its tail into the timeout error makes the
+  // real cause visible in the CI log instead of a bare "timed out".
+  let ocOutput = "";
+  const capture = (chunk: Buffer) => {
+    const text = chunk.toString();
+    process.stderr.write(text);
+    ocOutput = (ocOutput + text).slice(-4000);
+  };
+  proc.stdout?.on("data", capture);
+  proc.stderr?.on("data", capture);
 
   let spawnError: Error | null = null;
   proc.once("error", (err) => {
@@ -89,19 +102,25 @@ export async function startRealOpencode(): Promise<RealOpencode> {
   });
 
   try {
+    // 90s (not 30s): a cold CI runner's first `opencode serve` is far slower
+    // to bind /doc than a warm local machine's.
     await waitFor(
       async () => {
         if (spawnError) throw spawnError;
         const res = await fetch(`http://127.0.0.1:${port}/doc`);
         return res.ok;
       },
-      30_000,
+      90_000,
       `real opencode (${bin}) GET /doc on port ${port}`,
     );
   } catch (error) {
     proc.kill("SIGTERM");
     await waitForExit(proc).catch(() => {});
-    throw error;
+    const base = error instanceof Error ? error.message : String(error);
+    const detail = ocOutput.trim()
+      ? `\n--- opencode output (tail) ---\n${ocOutput.trim()}`
+      : " (opencode produced no output before the timeout)";
+    throw new Error(`${base}${detail}`);
   }
 
   return {
