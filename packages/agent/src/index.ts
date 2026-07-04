@@ -4,10 +4,12 @@ export * from "./opencode";
 export * from "./forward";
 export * from "./connect";
 export * from "./daemon";
+export * from "./install-command";
 
 import { readConfig } from "./config";
 import { connect, printResult, type ConnectOpts, type ConnectResult } from "./connect";
 import { defaultPidFilePath, defaultStateFilePath, readPidFile, readStateFile, removePidFile } from "./daemon";
+import { installCommand } from "./install-command";
 
 export type DisconnectResult =
   | { status: "disconnected" }
@@ -130,16 +132,6 @@ function parseArgs(argv: string[]): ConnectOpts {
   return opts;
 }
 
-// installCommand is task 3.5's shell-injection installer (writing the
-// `/mando` slash-command wrapper into the user's shell/agent config). Left
-// unimplemented here on purpose -- the "install-command" subcommand below
-// already routes to it so 3.5 only has to fill in this one function body,
-// not touch the CLI dispatch switch.
-function installCommand(_opts: ConnectOpts): number {
-  console.error("mando install-command: not yet implemented (task 3.5)");
-  return 1;
-}
-
 async function main(): Promise<void> {
   const [command, ...rest] = process.argv.slice(2);
   const opts = parseArgs(rest);
@@ -160,7 +152,8 @@ async function main(): Promise<void> {
       return;
     }
     case "install-command": {
-      process.exitCode = installCommand(opts);
+      const path = installCommand();
+      console.log(path);
       return;
     }
     default: {
