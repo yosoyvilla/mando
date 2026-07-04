@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, beforeEach } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { connect } from "../../src/connect";
@@ -84,6 +84,50 @@ describe("connect (pairing flow)", () => {
       const config = readConfig();
       expect(config?.token).toBe("tok-id.secret");
       expect(config?.hubUrl).toBe(url);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  it("treats an unparseable 2xx pairing-status body as still pending and keeps polling", async () => {
+    let polls = 0;
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        if (req.method === "POST" && url.pathname === "/api/v1/pairing/request") {
+          return Response.json(
+            { code: "BADJ-SON1", expiresAt: new Date(Date.now() + 60_000).toISOString() },
+            { status: 201 },
+          );
+        }
+        if (req.method === "GET" && url.pathname === "/api/v1/pairing/status") {
+          polls++;
+          // A 2xx response with a body that isn't valid JSON at all -- must
+          // not throw out of connect() as an unhandled rejection; the
+          // "treat non-approved as pending" comment should also cover a
+          // response that can't even be parsed.
+          if (polls <= 2) return new Response("not json", { status: 200 });
+          return Response.json({ status: "approved", token: "tok-recovered" }, { status: 200 });
+        }
+        return new Response("not found", { status: 404 });
+      },
+    });
+    const url = `http://localhost:${server.port}`;
+
+    try {
+      const result = await connect({
+        hub: url,
+        opencodePort: 4096,
+        pairingPollIntervalMs: 5,
+        spawnDaemon: () => 1,
+      });
+
+      expect(result).toEqual({ status: "connected", machine: expect.any(String), uiUrl: url });
+      expect(polls).toBeGreaterThanOrEqual(3);
+
+      const config = readConfig();
+      expect(config?.token).toBe("tok-recovered");
     } finally {
       server.stop(true);
     }

@@ -47,6 +47,35 @@ export function removePidFile(path: string): void {
   }
 }
 
+// Tiny on-disk record of when this machine was last known to be alive
+// (last successful local-opencode health check, or last successful
+// registration with the hub) -- read by status() to answer "when did we
+// last hear from this daemon" without touching the network. Mirrors the
+// pidfile pattern above: a single small file, env-overridable for tests.
+export interface DaemonState {
+  lastSeenAt: string;
+}
+
+export function defaultStateFilePath(): string {
+  return process.env.MANDO_STATE_FILE ?? join(homedir(), ".mando-state.json");
+}
+
+export function readStateFile(path: string): DaemonState | null {
+  if (!existsSync(path)) return null;
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf-8"));
+    return typeof parsed?.lastSeenAt === "string" ? { lastSeenAt: parsed.lastSeenAt } : null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeLastSeen(path: string, at: Date = new Date()): void {
+  const parentDir = dirname(path);
+  if (!existsSync(parentDir)) mkdirSync(parentDir, { recursive: true });
+  writeFileSync(path, JSON.stringify({ lastSeenAt: at.toISOString() } satisfies DaemonState), "utf-8");
+}
+
 // The subset of the WebSocket client interface the daemon loop actually
 // uses. `WebSocket` (Bun's global, spec-shaped client) satisfies this
 // structurally, so the real default (`(url) => new WebSocket(url)`) needs
@@ -75,6 +104,7 @@ export interface DaemonOptions {
   agentVersion?: string;
   opencodePassword?: string;
   pidFile?: string;
+  stateFile?: string;
   // All of the below are injection points for tests -- so the message
   // loop, reconnect backoff, and health polling can be driven
   // deterministically and fast, without a real socket, real opencode
@@ -113,6 +143,7 @@ export async function runDaemon(opts: DaemonOptions): Promise<void> {
     agentVersion = AGENT_VERSION,
     opencodePassword,
     pidFile = defaultPidFilePath(),
+    stateFile = defaultStateFilePath(),
     wsFactory = (url: string) => new WebSocket(url),
     nextDelay = defaultNextDelay,
     checkHealth = defaultCheckHealth,
@@ -160,6 +191,7 @@ export async function runDaemon(opts: DaemonOptions): Promise<void> {
       void checkHealth(opencodePort).then((healthy) => {
         if (stopped) return;
         consecutiveHealthFailures = healthy ? 0 : consecutiveHealthFailures + 1;
+        if (healthy) writeLastSeen(stateFile);
         onEvent({ type: "health_check", healthy, consecutiveFailures: consecutiveHealthFailures });
 
         if (socket && socket.readyState === WebSocket.OPEN) {
@@ -217,6 +249,7 @@ export async function runDaemon(opts: DaemonOptions): Promise<void> {
         switch (frame.type) {
           case "registered":
             attempt = 0;
+            writeLastSeen(stateFile);
             onEvent({ type: "registered", machineId: frame.payload.machineId });
             return;
           case "error":
@@ -253,6 +286,14 @@ export async function runDaemon(opts: DaemonOptions): Promise<void> {
       ws.addEventListener("close", () => {
         if (socket === ws) socket = null;
         if (stopped) return;
+        // Transient drop (hub restart, network blip) -- not the terminal
+        // stop() path (that already aborted+cleared inFlight itself, and
+        // returned above via the `stopped` check). Any http_request still
+        // being forwarded against local opencode is now bound to a `send`
+        // callback that writes to a dead socket, so abort it here rather
+        // than let it keep running to a response nobody will ever see.
+        for (const controller of inFlight.values()) controller.abort();
+        inFlight.clear();
         scheduleReconnect();
       });
 

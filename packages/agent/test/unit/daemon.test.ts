@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { parseFrame, serializeFrame, type Frame } from "@mando/protocol";
 import { runDaemon, type DaemonEvent, type DaemonSocket } from "../../src/daemon";
 
@@ -100,7 +100,7 @@ describe("runDaemon", () => {
       machineName: "machine-1",
       opencodePort: 4096,
       pidFile,
-      wsFactory: (url) => {
+      wsFactory: () => {
         const socket = new FakeSocket();
         sockets.push(socket);
         return socket;
@@ -153,7 +153,7 @@ describe("runDaemon", () => {
       machineName: "machine-2",
       opencodePort,
       pidFile: newPidFile(),
-      wsFactory: (url) => {
+      wsFactory: () => {
         const socket = new FakeSocket();
         sockets.push(socket);
         return socket;
@@ -188,10 +188,11 @@ describe("runDaemon", () => {
       port: 0,
       fetch(req) {
         return new Promise<Response>((resolve) => {
+          const timer = setTimeout(() => resolve(new Response("too-late")), 5000);
           req.signal.addEventListener("abort", () => {
             sawAbort = true;
+            clearTimeout(timer);
           });
-          setTimeout(() => resolve(new Response("too-late")), 5000);
         });
       },
     });
@@ -206,7 +207,7 @@ describe("runDaemon", () => {
       machineName: "machine-3",
       opencodePort,
       pidFile: newPidFile(),
-      wsFactory: (url) => {
+      wsFactory: () => {
         const socket = new FakeSocket();
         sockets.push(socket);
         return socket;
@@ -239,6 +240,108 @@ describe("runDaemon", () => {
     await daemonPromise;
   });
 
+  it("aborts in-flight forwards when the hub socket drops mid-forward, not just on explicit cancel", async () => {
+    let sawAbort = false;
+    stubOpencode = Bun.serve({
+      port: 0,
+      fetch(req) {
+        return new Promise<Response>((resolve) => {
+          const timer = setTimeout(() => resolve(new Response("too-late")), 5000);
+          req.signal.addEventListener("abort", () => {
+            sawAbort = true;
+            clearTimeout(timer);
+          });
+        });
+      },
+    });
+    const opencodePort = stubOpencode.port!;
+
+    const sockets: FakeSocket[] = [];
+    const controller = new AbortController();
+
+    const daemonPromise = runDaemon({
+      hubUrl: "http://hub.invalid",
+      token: "tok-drop",
+      machineName: "machine-drop",
+      opencodePort,
+      pidFile: newPidFile(),
+      wsFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+      checkHealth: async () => true,
+      healthCheckIntervalMs: 1_000_000,
+      // Keep the daemon from ever actually spinning up a second connection
+      // during the test -- only the abort-on-drop behavior is under test.
+      nextDelay: () => 1_000_000,
+      signal: controller.signal,
+    });
+
+    sockets[0]!.triggerOpen();
+    sockets[0]!.triggerMessage({ type: "registered", id: "hello-drop", payload: { machineId: "m-drop" } });
+    sockets[0]!.triggerMessage({
+      type: "http_request",
+      id: "req-drop",
+      payload: { method: "GET", path: "/slow", headers: {}, body: null },
+    });
+
+    // Give the fetch time to actually reach the stub before dropping.
+    await new Promise((r) => setTimeout(r, 30));
+    sockets[0]!.simulateDrop();
+
+    // The dropped socket's `send` is now writing into the void, but the
+    // forward() call itself must have been aborted -- proven by the stub
+    // opencode server observing its request signal fire.
+    await waitFor(() => sawAbort);
+
+    controller.abort();
+    await daemonPromise;
+  });
+
+  it("writes a lastSeenAt state file on registration and on successful health checks", async () => {
+    const sockets: FakeSocket[] = [];
+    const events: DaemonEvent[] = [];
+    const pidFile = newPidFile();
+    const stateFile = join(dirname(pidFile), "state.json");
+    const controller = new AbortController();
+
+    const daemonPromise = runDaemon({
+      hubUrl: "http://hub.invalid",
+      token: "tok-lastseen",
+      machineName: "machine-lastseen",
+      opencodePort: 4096,
+      pidFile,
+      stateFile,
+      wsFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+      checkHealth: async () => true,
+      healthCheckIntervalMs: 10,
+      signal: controller.signal,
+      onEvent: (e) => events.push(e),
+    });
+
+    expect(existsSync(stateFile)).toBe(false);
+
+    sockets[0]!.triggerOpen();
+    sockets[0]!.triggerMessage({ type: "registered", id: "hello-lastseen", payload: { machineId: "m-lastseen" } });
+
+    await waitFor(() => existsSync(stateFile));
+    const afterRegister = JSON.parse(readFileSync(stateFile, "utf-8"));
+    expect(typeof afterRegister.lastSeenAt).toBe("string");
+
+    await waitFor(() => events.some((e) => e.type === "health_check" && e.healthy));
+    expect(existsSync(stateFile)).toBe(true);
+    const afterHealthCheck = JSON.parse(readFileSync(stateFile, "utf-8"));
+    expect(typeof afterHealthCheck.lastSeenAt).toBe("string");
+
+    controller.abort();
+    await daemonPromise;
+  });
+
   it("reconnects with nextDelay backoff after the socket drops, and resets attempt on registration", async () => {
     const sockets: FakeSocket[] = [];
     const nextDelayCalls: number[] = [];
@@ -250,7 +353,7 @@ describe("runDaemon", () => {
       machineName: "machine-4",
       opencodePort: 4096,
       pidFile: newPidFile(),
-      wsFactory: (url) => {
+      wsFactory: () => {
         const socket = new FakeSocket();
         sockets.push(socket);
         return socket;
@@ -286,7 +389,6 @@ describe("runDaemon", () => {
   it("does not reconnect after an unrecoverable hub error frame (e.g. unauthorized token)", async () => {
     const sockets: FakeSocket[] = [];
     const events: DaemonEvent[] = [];
-    const controller = new AbortController();
     const pidFile = newPidFile();
 
     const daemonPromise = runDaemon({
@@ -295,7 +397,7 @@ describe("runDaemon", () => {
       machineName: "machine-5",
       opencodePort: 4096,
       pidFile,
-      wsFactory: (url) => {
+      wsFactory: () => {
         const socket = new FakeSocket();
         sockets.push(socket);
         return socket;
@@ -326,7 +428,7 @@ describe("runDaemon", () => {
       machineName: "machine-6",
       opencodePort: 4096,
       pidFile,
-      wsFactory: (url) => {
+      wsFactory: () => {
         const socket = new FakeSocket();
         sockets.push(socket);
         return socket;
