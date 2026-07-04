@@ -2,7 +2,7 @@ import { test, expect, beforeAll } from "bun:test";
 import { getDb } from "../../src/db/client";
 import { runMigrations } from "../../src/db/migrate";
 
-const url = process.env.TEST_DATABASE_URL ?? "postgres://mando:mando@localhost:5432/mando";
+const url = process.env.TEST_DATABASE_URL ?? "postgres://mando:mando@localhost:5433/mando";
 
 beforeAll(async () => { await runMigrations(getDb(url)); });
 
