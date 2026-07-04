@@ -53,7 +53,7 @@ function questionsKey(machineId: string) {
 }
 
 function gitDiffKey(machineId: string) {
-  return [machineId, "/git/diff"] as const;
+  return [machineId, "/vcs/diff/raw"] as const;
 }
 
 function currentProjectKey(machineId: string) {

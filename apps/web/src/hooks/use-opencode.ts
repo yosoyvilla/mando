@@ -1,6 +1,6 @@
 import useSWR from "swr";
 import { useMachineStore } from "@/stores/machine-store";
-import { opencodeJson } from "@/lib/opencode-fetch";
+import { opencodeJson, opencodeRequest } from "@/lib/opencode-fetch";
 import { hubClient as defaultHubClient } from "@/lib/hub-client-instance";
 import type { HubClient, Machine } from "@/lib/hub-client";
 import type { SessionStatus } from "@opencode-ai/sdk/v2";
@@ -28,6 +28,22 @@ function fetcher([machineId, path]: readonly [string, string]): Promise<any> {
 // Untyped (matches `fetcher`'s implicit `res.json(): any`) so each
 // `useSWR<T>` call site can pin its own response shape, same convention as
 // the shared `fetcher` above.
+// `/vcs/diff/raw` (unlike every other path this hook file touches) responds
+// with a raw `text/x-diff` body, not JSON -- `opencodeJson`'s `res.json()`
+// would throw `SyntaxError: Unexpected token 'd', "diff --gi"...` on it.
+// Wraps the text in `{ diff }` so callers keep the same shape they had
+// before this fix (`parsePatchFiles(data.diff)` in routes/_app/diff.tsx and
+// app-sidebar.tsx).
+async function rawDiffFetcher(
+  [machineId, path]: readonly [string, string],
+): Promise<{ diff: string }> {
+  const res = await opencodeRequest(machineId, path);
+  if (!res.ok) {
+    throw new Error(`Request failed: ${res.status}`);
+  }
+  return { diff: await res.text() };
+}
+
 async function dataFetcher([machineId, path]: readonly [string, string]): Promise<any> {
   const body = await opencodeJson<{ data: unknown }>(machineId, path);
   return body.data;
@@ -169,15 +185,23 @@ export function useDeleteSession() {
 export function useGitDiff() {
   const backend = useBackend();
 
-  // NOTE: intentionally left pointed at the non-existent "/git/diff" --
-  // there is no real opencode endpoint that returns this hook's
-  // `{ diff, worktree }` shape. The closest real equivalents
-  // (`GET /session/:id/diff`, `GET /vcs/diff`) return an unrelated
-  // SnapshotFileDiff[]/session-diff shape and would need a hub-side
-  // adapter to reconcile; out of scope for this fix (see report).
-  return useSWR<{ diff: string; worktree: string }>(
-    backend ? ([backend.machineId, "/git/diff"] as const) : null,
-    fetcher,
+  // Real opencode has no `/git/diff` endpoint. `GET /vcs/diff/raw` (confirmed
+  // against a live opencode 1.17.13 server's `/doc` OpenAPI spec and live
+  // curls) returns the working tree's unified diff as a raw `text/x-diff`
+  // body -- the same output `git diff` itself would produce, and exactly
+  // what `parsePatchFiles` here already parses via this hook's consumers
+  // (routes/_app/diff.tsx, app-sidebar.tsx). The JSON `GET /vcs/diff`
+  // (requires a `mode=git|branch` query param) returns an array of per-file
+  // `{file, patch, additions, deletions, status}` diffs instead --
+  // reassembling those `patch` strings into one blob would just reinvent
+  // what `/vcs/diff/raw` already hands back directly, for no benefit.
+  // Neither has an `/api/`-prefixed counterpart: like `/permission` and
+  // `/config/providers`, `/vcs/*` is one of opencode's un-prefixed legacy
+  // paths. `worktree` is dropped from the old shape -- no caller ever read
+  // it, and the real server has nothing that maps to it.
+  return useSWR<{ diff: string }>(
+    backend ? ([backend.machineId, "/vcs/diff/raw"] as const) : null,
+    rawDiffFetcher,
   );
 }
 

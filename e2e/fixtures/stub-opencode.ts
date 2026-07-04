@@ -65,6 +65,16 @@ function sendNoContent(res: ServerResponse): void {
   res.end();
 }
 
+function sendText(
+  res: ServerResponse,
+  body: string,
+  contentType: string,
+  status = 200,
+): void {
+  res.writeHead(status, { "content-type": contentType });
+  res.end(body);
+}
+
 function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
   return new Promise((resolve) => {
     let raw = "";
@@ -307,7 +317,30 @@ export async function startStubOpencode(): Promise<StubOpencode> {
     if (method === "GET" && path === "/permission") return sendJson(res, []);
     if (method === "GET" && path === "/question") return sendJson(res, []);
 
-    if (method === "GET" && path === "/git/diff") return sendJson(res, { diff: "", worktree: "" });
+    // `GET /vcs/diff/raw` (no /api prefix, same family as `/vcs/diff` and
+    // `/vcs/status`) -- real opencode returns the working tree's unified
+    // diff as a raw `text/x-diff` body, not JSON. This is what
+    // use-opencode.ts's `useGitDiff` now targets (see its comment for why,
+    // and why there's no `/git/diff` or `/api/vcs/diff`). A non-empty patch
+    // here, rather than an empty string, lets the Diff view's
+    // `parsePatchFiles` + `FileDiff` rendering path actually get exercised
+    // by e2e tests instead of only hitting the "no changes" empty state.
+    if (method === "GET" && path === "/vcs/diff/raw") {
+      return sendText(
+        res,
+        [
+          "diff --git a/README.md b/README.md",
+          "index 8bcb179..f5127b4 100644",
+          "--- a/README.md",
+          "+++ b/README.md",
+          "@@ -1,1 +1,2 @@",
+          " # OpenCode Mando",
+          "+Stub diff line for e2e coverage.",
+          "",
+        ].join("\n"),
+        "text/x-diff; charset=utf-8",
+      );
+    }
     if (method === "GET" && path === "/files/search") return sendJson(res, { data: [] });
 
     // `POST /api/session` -> `{ data: SessionV2Info }`. Real opencode's
