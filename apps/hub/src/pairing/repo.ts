@@ -1,6 +1,10 @@
 import type postgres from "postgres";
 
-type Sql = ReturnType<typeof postgres>;
+// postgres.ISql covers both a top-level connection and a transaction handle
+// (the `tx` passed into a sql.begin(...) callback) -- consumePairingRequest
+// is called with `tx` so it can share a transaction with the machine/token
+// inserts in approvePairing.
+type Sql = postgres.ISql;
 
 export type PairingRequestRow = {
   code: string;
@@ -28,15 +32,20 @@ export async function findPairingRequestByCode(sql: Sql, code: string): Promise<
   return (rows[0] as PairingRequestRow) ?? null;
 }
 
+// Atomic: the `consumed_at is null` guard means only one concurrent caller
+// can win this update for a given code. Callers must check the returned
+// row count -- zero rows means another request already consumed it.
 export async function consumePairingRequest(
   sql: Sql,
   code: string,
   userId: string,
   machineId: string,
-): Promise<void> {
-  await sql`
+): Promise<boolean> {
+  const rows = await sql`
     update pairing_requests
     set consumed_at = now(), user_id = ${userId}, machine_id = ${machineId}
-    where code = ${code}
+    where code = ${code} and consumed_at is null
+    returning code
   `;
+  return rows.length > 0;
 }
