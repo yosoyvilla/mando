@@ -1,6 +1,13 @@
 import { existsSync, readFileSync, writeFileSync, chmodSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
+import { z } from "zod";
+
+const agentConfigSchema = z.object({
+  hubUrl: z.string(),
+  token: z.string().optional(),
+  machineName: z.string(),
+});
 
 export interface AgentConfig {
   hubUrl: string;
@@ -22,13 +29,26 @@ export function readConfig(): AgentConfig | null {
     return null;
   }
 
+  let content: string;
   try {
-    const content = readFileSync(configPath, "utf-8");
-    const config = JSON.parse(content) as AgentConfig;
-    return config;
+    content = readFileSync(configPath, "utf-8");
   } catch (error) {
     throw new Error(`Failed to read config from ${configPath}: ${error}`);
   }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch (error) {
+    throw new Error(`invalid mando config at ${configPath}: ${error}`);
+  }
+
+  const result = agentConfigSchema.safeParse(parsed);
+  if (!result.success) {
+    throw new Error(`invalid mando config at ${configPath}: ${result.error.message}`);
+  }
+
+  return result.data;
 }
 
 export function writeConfig(config: AgentConfig): void {
@@ -42,7 +62,7 @@ export function writeConfig(config: AgentConfig): void {
 
   try {
     const content = JSON.stringify(config, null, 2);
-    writeFileSync(configPath, content, "utf-8");
+    writeFileSync(configPath, content, { encoding: "utf-8", mode: 0o600 });
     chmodSync(configPath, 0o600);
   } catch (error) {
     throw new Error(`Failed to write config to ${configPath}: ${error}`);
