@@ -8,11 +8,11 @@
 // from the composer.
 //
 // Scenario (see global-setup-real.ts): before the machine came online, the
-// setup created a session by talking to real opencode DIRECTLY (the
-// "terminal" client) and recorded its id in REAL_HANDOFF_STATE_FILE. This
-// test is the "other device": it must rediscover THAT exact session in the
-// real UI -- the SPA driving real opencode through the tunnel -- and
-// continue it.
+// setup created a session the way a real terminal user does, via
+// `opencode run` (the "terminal" client), and recorded its id + message
+// text in REAL_HANDOFF_STATE_FILE. This test is the "other device": it must
+// rediscover THAT exact session in the real UI -- the SPA driving real
+// opencode through the tunnel -- and continue it.
 //
 // No assistant reply is asserted (no model provider is configured in CI).
 // Proving the user's prompt (a) renders in the UI and (b) reaches the real
@@ -22,7 +22,12 @@ import { readFileSync } from "node:fs";
 import { test, expect, type Page } from "@playwright/test";
 import { login } from "../fixtures/ui-helpers";
 import { loginForCookie } from "../fixtures/hub-api";
-import { REAL_HANDOFF_STATE_FILE, type RealHandoffState } from "../fixtures/real-opencode";
+import {
+  opencodeMessageText,
+  REAL_HANDOFF_STATE_FILE,
+  type OpencodeMessageEntry,
+  type RealHandoffState,
+} from "../fixtures/real-opencode";
 import { ADMIN_EMAIL, ADMIN_PASSWORD } from "../harness-config";
 
 function loadState(): RealHandoffState {
@@ -63,25 +68,37 @@ test.describe("real opencode session handoff (browser UI)", () => {
     // 2. Select the real machine (the one tunnelled to real opencode).
     await ensureMachineSelected(page, state.machineName);
 
-    // 3. The session the "terminal" created directly against real opencode
-    //    -- before this UI ever connected -- must surface in the sidebar's
-    //    session list. We match by the exact session id via its link href,
-    //    never by title or list position (opencode lists global sessions).
+    // 3. The session the "terminal" created via `opencode run` -- before
+    //    this UI ever connected -- must surface in the sidebar's session
+    //    list. We match by the exact session id via its link href, never by
+    //    title or list position (opencode lists global sessions).
     const sessionLink = page.locator(`a[href="/session/${state.terminalSessionId}"]`);
     await expect(
       sessionLink,
       "the terminal-created session should appear in the UI session list",
     ).toBeVisible({ timeout: 15_000 });
 
-    // 4. Open it; the message view must load without error. An empty history
-    //    ("No messages yet") is fine -- what matters is no load error and the
-    //    composer being ready.
+    // 3a. It's also the newest (only) session in this machine's connect
+    //     directory, so the sidebar must pin it with the LIVE badge (see
+    //     sidebar-session-list.tsx -- index 0 gets the badge).
+    await expect(
+      sessionLink.getByText("LIVE"),
+      "the terminal-created session, being the newest in its directory, should carry the LIVE badge",
+    ).toBeVisible();
+
+    // 4. Open it; the message view must load without error AND render the
+    //    terminal's own message text -- this is the exact production bug
+    //    this suite guards against (session visible, messages empty).
     await sessionLink.click();
     await expect(page).toHaveURL(new RegExp(`/session/${state.terminalSessionId}$`));
     await expect(
       page.getByText(/^Error:/),
       "the session message view should load without an error banner",
     ).toHaveCount(0);
+    await expect(
+      page.getByTestId("user-message").filter({ hasText: state.terminalMessageText }),
+      "the terminal's own message text should render in the reopened session",
+    ).toBeVisible();
 
     const composer = page.getByPlaceholder("Type your message... (use @ to mention files)");
     await expect(composer).toBeVisible();
@@ -103,12 +120,12 @@ test.describe("real opencode session handoff (browser UI)", () => {
       .poll(
         async () => {
           const res = await fetch(
-            `${state.hubBaseUrl}/api/v1/machines/${state.machineId}/opencode/api/session/${state.terminalSessionId}/message`,
+            `${state.hubBaseUrl}/api/v1/machines/${state.machineId}/opencode/session/${state.terminalSessionId}/message`,
             { headers: { cookie } },
           );
           if (!res.ok) return false;
-          const body = (await res.json()) as { data: Array<{ text?: string }> };
-          return body.data.some((m) => m.text === promptText);
+          const body = (await res.json()) as OpencodeMessageEntry[];
+          return body.some((entry) => opencodeMessageText(entry) === promptText);
         },
         {
           message: "the prompt sent from the browser should reach the real opencode session",
