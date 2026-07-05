@@ -103,8 +103,16 @@ test.describe("real opencode session handoff", () => {
 
   // Assertion 3: a prompt POSTed through the proxy REACHES the real opencode
   // session -- accepted (2xx) AND recorded as a new user message in that
-  // session's history. We do NOT require an assistant reply (no provider in
-  // CI); real opencode records the user message and returns 2xx regardless.
+  // session's history. `noReply: true` is load-bearing: WITHOUT it, the
+  // unprefixed `POST /session/:id/message` holds the request open while it
+  // synchronously attempts an assistant reply, and with no provider
+  // configured that attempt has been observed to hang past the 90s test
+  // timeout in CI (Playwright then kills the run with "Request context
+  // disposed") while passing locally on timing luck. What this test exists
+  // to prove -- tunnel delivery + persistence of the user message -- is
+  // identical either way; generation is not assertable in CI at all. (The
+  // browser handoff spec still exercises the web's real no-noReply send
+  // path safely, because the UI never awaits that request.)
   test("a prompt sent via the hub proxy reaches the real opencode session", async ({ request }) => {
     const promptText = `handoff continuity ${crypto.randomUUID().slice(0, 8)}`;
 
@@ -115,7 +123,7 @@ test.describe("real opencode session handoff", () => {
       `${state.hubBaseUrl}/api/v1/machines/${state.machineId}/opencode/session/${state.terminalSessionId}/message`,
       {
         headers: { cookie, "content-type": "application/json" },
-        data: { parts: [{ type: "text", text: promptText }] },
+        data: { noReply: true, parts: [{ type: "text", text: promptText }] },
       },
     );
     expect(res.ok(), `POST .../message should be accepted by real opencode (2xx), got ${res.status()}`).toBeTruthy();
