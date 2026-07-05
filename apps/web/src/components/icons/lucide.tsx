@@ -31,6 +31,7 @@ import {
   Moon,
   Box,
   PanelLeft,
+  Paperclip,
   Palette,
   PenLine,
   Plus,
@@ -110,6 +111,7 @@ export const IconGitPullRequest = createAppIcon(GitPullRequest, "18px");
 export const IconGridPlus = createAppIcon(Grid2X2Plus, "18px");
 export const IconMagnifier = createAppIcon(Search);
 export const IconManageInstances = createAppIcon(ServerCog, "18px");
+export const IconPaperclip = createAppIcon(Paperclip);
 export const IconPen = createAppIcon(PenLine);
 export const IconSquareFeather = createAppIcon(Feather);
 export const IconThemeDark = createAppIcon(Moon, "18px");

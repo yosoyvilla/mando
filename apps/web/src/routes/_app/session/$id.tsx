@@ -19,12 +19,14 @@ import {
   IconBadgeSparkle,
   IconEye,
   IconMagnifier,
+  IconPaperclip,
   IconPen,
   IconSquareFeather,
   IconUser,
   InformationCircleIcon,
   SendIcon,
 } from "@/components/icons/lucide";
+import { ComposerAttachments } from "@/components/composer-attachments";
 import { useAgentStore } from "@/stores/agent-store";
 import { useMachineStore } from "@/stores/machine-store";
 import { useModelStore } from "@/stores/model-store";
@@ -60,6 +62,14 @@ import {
 } from "@/lib/agent-selection";
 import { getErrorMessage, getResponseErrorMessage } from "@/lib/error-message";
 import { opencodeJson, opencodeRequest } from "@/lib/opencode-fetch";
+import {
+  buildFileParts,
+  createAttachmentId,
+  fileToDataUrl,
+  filesFromFileList,
+  validate as validateAttachment,
+  type Attachment,
+} from "@/lib/attachments";
 import type { Agent, Session } from "@opencode-ai/sdk/v2";
 
 export const Route = createFileRoute("/_app/session/$id")({
@@ -832,13 +842,82 @@ function SessionPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [hasScrolledInitially, setHasScrolledInitially] = useState(false);
   const [fileResults, setFileResults] = useState<string[]>([]);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const submitLockRef = useRef(false);
   const isNearBottomRef = useRef(true);
   const prevMessagesLengthRef = useRef(0);
   const fileMention = useFileMention();
+  // Mirrors `attachments` so a same-batch add (multiple files pasted or
+  // dropped at once) sees the running count/total synchronously, without
+  // relying on a setState updater callback (React Strict Mode may invoke
+  // those twice, which would double-generate attachment ids).
+  const attachmentsRef = useRef<Attachment[]>([]);
+
+  const applyAttachments = useCallback((next: Attachment[]) => {
+    attachmentsRef.current = next;
+    setAttachments(next);
+  }, []);
+
+  const addFiles = useCallback(
+    async (files: File[]) => {
+      if (files.length === 0) return;
+      setAttachmentError(null);
+
+      for (const file of files) {
+        const result = validateAttachment(file, attachmentsRef.current);
+        if (!result.ok) {
+          setAttachmentError(result.error);
+          break;
+        }
+
+        const pendingId = createAttachmentId();
+        applyAttachments([
+          ...attachmentsRef.current,
+          {
+            id: pendingId,
+            name: file.name,
+            mime: file.type,
+            size: file.size,
+            dataUrl: "",
+          },
+        ]);
+
+        try {
+          const dataUrl = await fileToDataUrl(file);
+          applyAttachments(
+            attachmentsRef.current.map((attachment) =>
+              attachment.id === pendingId
+                ? { ...attachment, dataUrl }
+                : attachment,
+            ),
+          );
+        } catch {
+          setAttachmentError("Failed to read file.");
+          applyAttachments(
+            attachmentsRef.current.filter(
+              (attachment) => attachment.id !== pendingId,
+            ),
+          );
+        }
+      }
+    },
+    [applyAttachments],
+  );
+
+  const removeAttachment = useCallback(
+    (id: string) => {
+      applyAttachments(
+        attachmentsRef.current.filter((attachment) => attachment.id !== id),
+      );
+    },
+    [applyAttachments],
+  );
 
   const messagesLoadError = messagesError?.message;
 
@@ -970,7 +1049,11 @@ function SessionPage() {
   }, [sessionId]);
 
   const sendMessage = useCallback(
-    async (messageText: string, messageId: string) => {
+    async (
+      messageText: string,
+      messageId: string,
+      messageAttachments: Attachment[],
+    ) => {
       if (!sessionId || !machineId) return;
 
       try {
@@ -1024,7 +1107,14 @@ function SessionPage() {
               ...(agentOverride && agentOverride !== currentSession?.agent
                 ? { agent: agentOverride }
                 : {}),
-              parts: [{ type: "text", text: messageText }],
+              // Files are sent ahead of the text part; a file-only message
+              // (empty text with attachments) omits the text part entirely.
+              parts: [
+                ...buildFileParts(messageAttachments),
+                ...(messageText
+                  ? [{ type: "text" as const, text: messageText }]
+                  : []),
+              ],
             }),
           },
         );
@@ -1069,11 +1159,18 @@ function SessionPage() {
     ],
   );
 
+  const hasPendingAttachmentReads = attachments.some(
+    (attachment) => attachment.dataUrl === "",
+  );
+  const canSubmitAttachments =
+    attachments.length > 0 && !hasPendingAttachmentReads;
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const messageText = input.trim();
     if (
-      !messageText ||
+      (!messageText && !canSubmitAttachments) ||
+      hasPendingAttachmentReads ||
       !sessionId ||
       !machineId ||
       machineOffline ||
@@ -1086,7 +1183,10 @@ function SessionPage() {
     submitLockRef.current = true;
     setIsSubmitting(true);
     const messageId = createClientMessageId();
+    const messageAttachments = attachments;
     setInput("");
+    applyAttachments([]);
+    setAttachmentError(null);
     setSendError(null);
 
     const optimisticMessage: MessageWithParts = {
@@ -1099,22 +1199,37 @@ function SessionPage() {
         model: { providerID: "", modelID: "" },
       },
       parts: [
-        {
-          id: `${messageId}-part`,
+        ...messageAttachments.map((attachment, index) => ({
+          id: `${messageId}-file-${index}`,
           sessionID: sessionId,
           messageID: messageId,
-          type: "text",
-          text: messageText,
-        },
+          type: "file" as const,
+          mime: attachment.mime,
+          filename: attachment.name,
+          url: attachment.dataUrl,
+        })),
+        ...(messageText
+          ? [
+              {
+                id: `${messageId}-part`,
+                sessionID: sessionId,
+                messageID: messageId,
+                type: "text" as const,
+                text: messageText,
+              },
+            ]
+          : []),
       ],
       isQueued: sending,
     };
     addOptimisticMessage(machineId, sessionId, optimisticMessage);
 
-    void sendMessage(messageText, messageId).finally(() => {
-      submitLockRef.current = false;
-      setIsSubmitting(false);
-    });
+    void sendMessage(messageText, messageId, messageAttachments).finally(
+      () => {
+        submitLockRef.current = false;
+        setIsSubmitting(false);
+      },
+    );
 
     isNearBottomRef.current = true;
     scrollToBottom();
@@ -1228,7 +1343,46 @@ function SessionPage() {
         )}
       </div>
 
-      <div className="border-t border-border p-4 shrink-0 relative">
+      <div
+        className="border-t border-border p-4 shrink-0 relative"
+        onDragOver={(e) => {
+          if (machineOffline) return;
+          e.preventDefault();
+          setIsDraggingFiles(true);
+        }}
+        onDragLeave={(e) => {
+          if (e.currentTarget === e.target) {
+            setIsDraggingFiles(false);
+          }
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          setIsDraggingFiles(false);
+          if (machineOffline) return;
+          void addFiles(filesFromFileList(e.dataTransfer.files));
+        }}
+      >
+        {isDraggingFiles && (
+          <div
+            role="presentation"
+            className="pointer-events-none absolute inset-1 z-10 flex items-center justify-center rounded-md border-2 border-dashed border-primary bg-primary/5"
+          >
+            <span className="text-sm font-medium text-primary">
+              Drop to attach
+            </span>
+          </div>
+        )}
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          accept="image/*,application/pdf"
+          hidden
+          onChange={(e) => {
+            void addFiles(filesFromFileList(e.target.files));
+            e.target.value = "";
+          }}
+        />
         <SessionContinuityHint />
         <FileMentionPopover
           isOpen={fileMention.isOpen}
@@ -1252,10 +1406,29 @@ function SessionPage() {
               className="mb-3"
             />
           )}
+          {attachmentError && (
+            <ChatErrorAlert
+              title="Attachment error"
+              message={attachmentError}
+              className="mb-3"
+            />
+          )}
+          <ComposerAttachments
+            attachments={attachments}
+            onRemove={removeAttachment}
+            disabled={sending}
+          />
           <div className="relative">
             <Textarea
               ref={textareaRef}
               value={input}
+              onPaste={(e) => {
+                const files = filesFromFileList(e.clipboardData?.files);
+                if (files.length > 0) {
+                  e.preventDefault();
+                  void addFiles(files);
+                }
+              }}
               onChange={(e) => {
                 const value = e.target.value;
                 setInput(value);
@@ -1302,7 +1475,11 @@ function SessionPage() {
                 }
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
-                  if (input.trim() && !sending && !submitLockRef.current) {
+                  if (
+                    (input.trim() || canSubmitAttachments) &&
+                    !sending &&
+                    !submitLockRef.current
+                  ) {
                     handleSubmit(e as unknown as React.FormEvent);
                   }
                 }
@@ -1313,7 +1490,12 @@ function SessionPage() {
             />
             <Button
               type="submit"
-              isDisabled={!input.trim() || sending || machineOffline}
+              isDisabled={
+                (!input.trim() && !canSubmitAttachments) ||
+                hasPendingAttachmentReads ||
+                sending ||
+                machineOffline
+              }
               isCircle
               size="sq-sm"
               aria-label={sending ? "Sending message" : "Send message"}
@@ -1330,9 +1512,21 @@ function SessionPage() {
               )}
             </Button>
           </div>
-          <div className="mt-3 flex items-center justify-end gap-2">
-            {supportsAgentSelection && <AgentSelect sessionId={sessionId} />}
-            <ModelSelect />
+          <div className="mt-3 flex items-center justify-between gap-2">
+            <Button
+              type="button"
+              intent="plain"
+              size="sq-sm"
+              isDisabled={sending || machineOffline}
+              aria-label="Attach files"
+              onPress={() => fileInputRef.current?.click()}
+            >
+              <IconPaperclip size="16px" />
+            </Button>
+            <div className="flex items-center gap-2">
+              {supportsAgentSelection && <AgentSelect sessionId={sessionId} />}
+              <ModelSelect />
+            </div>
           </div>
         </form>
       </div>
