@@ -50,6 +50,15 @@ exposed to the network.
   body field is silently ignored), and `POST /session/:id/message` without
   `noReply: true` synchronously attempts an assistant reply (harness code
   must always pass `noReply: true`).
+- **`/mando-refresh` is a replay, not a redraw.** A plain TUI has no control
+  surface (its internal port 404s everything, `/tui/*` included — verified),
+  so the command works through the one shared channel: the session store.
+  Its markdown (canonical: `packages/opencode-plugin/commands/mando-refresh.md`,
+  embedded in `packages/agent/src/install-command.ts`) instructs the
+  assistant to quote the messages since the user's previous one — verified
+  live: remote content lands in the terminal transcript as a reply. Keep the
+  template tool-free (`Without using any tools`) and keep the exact no-op
+  sentence tests assert on.
 - **`mando tui` is the mirrored-terminal path.**
   Opencode's attach mode and its `/tui/*` control endpoints
   (`append-prompt`, `submit-prompt`, `show-toast`, `select-session`, and the

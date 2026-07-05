@@ -166,8 +166,7 @@ async function main(): Promise<void> {
       return;
     }
     case "install-command": {
-      const path = installCommand();
-      console.log(path);
+      for (const path of installCommand()) console.log(path);
       return;
     }
     case "tui": {
