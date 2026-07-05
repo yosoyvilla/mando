@@ -148,35 +148,57 @@ async function pollUntilApproved(
   return { status: "expired" };
 }
 
-// Spawns the detached daemon child (see daemon.ts) that owns the actual WS
-// connection/forward loop for the rest of this "session". Per Bun's own
-// docs, `detached: true` alone does not let the parent exit before the
-// child -- `stdio: ["ignore","ignore","ignore"]` (so no inherited pipe
-// keeps the parent alive waiting to drain it) AND calling `proc.unref()`
-// are both required; see the SpawnOptions.detached doc comment in
-// bun-types (node_modules/.../bun-types/bun.d.ts).
+// True while this code is running inside a `bun build --compile` binary.
+// Verified against bun 1.3.14: inside a compiled standalone executable,
+// import.meta.dir is a virtual `/$bunfs/...` path rather than a real
+// on-disk directory -- there is no `Bun.isStandaloneExecutable` (checked;
+// it does not exist on this bun version) to ask directly instead.
+function runningFromCompiledBinary(): boolean {
+  return import.meta.dir.startsWith("/$bunfs");
+}
+
+// Spawns the detached daemon child (see daemon.ts's runDaemonMain) that
+// owns the actual WS connection/forward loop for the rest of this
+// "session". Per Bun's own docs, `detached: true` alone does not let the
+// parent exit before the child -- `stdio: ["ignore","ignore","ignore"]`
+// (so no inherited pipe keeps the parent alive waiting to drain it) AND
+// calling `proc.unref()` are both required; see the SpawnOptions.detached
+// doc comment in bun-types (node_modules/.../bun-types/bun.d.ts).
+//
+// The child is the current executable re-exec'd with a hidden `_daemon`
+// argv rather than `bun daemon.ts` directly: inside a released, compiled
+// `mando` binary (`bun build --compile`) there is no daemon.ts on disk for
+// `bun` to run -- import.meta.dir there is a virtual `/$bunfs/...` path --
+// so `process.execPath` (the mando binary itself) is re-invoked with
+// `_daemon` (see index.ts's hidden dispatch), which runs the exact same
+// runDaemonMain() in-process instead. Running from source, `process
+// .execPath` is the `bun` binary, so index.ts still needs to be named
+// explicitly as the entrypoint.
 //
 // The pidfile is written here, synchronously, using `proc.pid` -- not
 // deferred to the child writing its own pidfile once its event loop gets
 // around to it -- so that by the time connect() returns and prints
 // "connected", `disconnect()`/`status()` can already find it. daemon.ts's
 // own runDaemon() also writes the same pidfile at startup (see its
-// module comment); since the child is spawned directly as `bun
-// daemon.ts` with no intermediate shell, `proc.pid` and the daemon's own
-// `process.pid` are the same process, so this is a redundant-but-harmless
-// overwrite with an identical value, not a race.
+// module comment); since the child is spawned directly with no
+// intermediate shell, `proc.pid` and the daemon's own `process.pid` are
+// the same process, so this is a redundant-but-harmless overwrite with an
+// identical value, not a race.
 function defaultSpawnDaemon(opencodePort: number): number {
-  const daemonPath = join(import.meta.dir, "daemon.ts");
-  const proc = Bun.spawn(["bun", daemonPath, "--opencode-port", String(opencodePort)], {
+  const args = runningFromCompiledBinary()
+    ? [process.execPath, "_daemon", "--opencode-port", String(opencodePort)]
+    : [process.execPath, join(import.meta.dir, "index.ts"), "_daemon", "--opencode-port", String(opencodePort)];
+
+  const proc = Bun.spawn(args, {
     detached: true,
     stdio: ["ignore", "ignore", "ignore"],
     // Bun.spawn's `env` defaults to a snapshot of process.env taken when
     // *this* bun process launched -- runtime mutations (e.g. MANDO_CONFIG/
     // MANDO_PID_FILE overrides set by a caller or a test) are invisible to
-    // that default. Passing process.env explicitly here means the child
-    // always sees the current env, including MANDO_HUB/MANDO_CONFIG/
-    // MANDO_PID_FILE/MANDO_OPENCODE_PASSWORD overrides.
-    env: process.env,
+    // that default. Spreading process.env explicitly here means the child
+    // sees the current env as of this call, including MANDO_HUB/
+    // MANDO_CONFIG/MANDO_PID_FILE/MANDO_OPENCODE_PASSWORD overrides.
+    env: { ...process.env },
   });
   proc.unref();
   writePidFile(defaultPidFilePath(), proc.pid);
@@ -269,7 +291,18 @@ export async function connect(opts: ConnectOpts = {}): Promise<ConnectResult> {
   // too) -- belt-and-suspenders against a stale error file from a previous
   // run being misread as this run's failure by the check below.
   clearLastError(errorFile);
-  spawnDaemon(opencodePort);
+
+  let daemonPid: number;
+  try {
+    daemonPid = spawnDaemon(opencodePort);
+  } catch (error) {
+    // Compiled installs where re-exec'ing the current executable itself
+    // fails (e.g. permissions, a missing execPath) must not be reported as
+    // "Connected" -- there is no daemon and never was one.
+    const message = `failed to start daemon: ${error instanceof Error ? error.message : String(error)}`;
+    printResult(opts.json, { status: "error", message }, `Error: ${message}`);
+    return { status: "error", message };
+  }
 
   // A fatal hub rejection (version_mismatch, unauthorized, hello_timeout)
   // happens immediately after the daemon's WS handshake -- well inside
@@ -284,6 +317,20 @@ export async function connect(opts: ConnectOpts = {}): Promise<ConnectResult> {
   const fatal = readLastError(errorFile);
   if (fatal) {
     const message = `daemon failed to connect: ${fatal.message}`;
+    printResult(opts.json, { status: "error", message }, `Error: ${message}`);
+    return { status: "error", message };
+  }
+
+  // Belt-and-suspenders for failures the error-file channel above can't
+  // see at all -- e.g. the compiled binary's re-exec'd `_daemon` child
+  // dying before it ever gets far enough to open a socket (a missing
+  // token, a bad argv, `process.execPath` resolving to something that
+  // isn't actually this same binary). Without this, such a dead-on-arrival
+  // daemon left connect() with no fatal error recorded and nothing to
+  // report but a false "Connected" -- see the module-level bug this task
+  // fixes.
+  if (!isProcessAlive(daemonPid)) {
+    const message = "daemon process is not running after spawn -- check that the mando binary can re-execute itself (`_daemon`)";
     printResult(opts.json, { status: "error", message }, `Error: ${message}`);
     return { status: "error", message };
   }

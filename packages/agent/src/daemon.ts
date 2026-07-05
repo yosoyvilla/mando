@@ -376,47 +376,60 @@ export async function runDaemon(opts: DaemonOptions): Promise<void> {
   });
 }
 
+// Parses the daemon's own CLI args (just `--opencode-port <n>`), loads the
+// local config, and runs runDaemon() to completion, exiting the process
+// when it's done. Factored out of the `import.meta.main` block below so
+// it can be called two ways: directly, as `bun daemon.ts --opencode-port
+// <n>` (still used by tests/e2e that spawn this file as a standalone
+// script -- see the block below); and in-process, from index.ts's hidden
+// `_daemon` subcommand, which is how the compiled `mando` binary spawns
+// the daemon (see connect.ts's defaultSpawnDaemon) -- a `bun build
+// --compile` binary has no daemon.ts on disk to hand to `bun`, so
+// re-executing the binary itself with `_daemon` and running this same
+// entry logic in-process is the only way to get an equivalent detached
+// child.
+export async function runDaemonMain(args: string[]): Promise<void> {
+  const portIndex = args.indexOf("--opencode-port");
+  const opencodePort = portIndex >= 0 ? Number(args[portIndex + 1]) : NaN;
+  if (!Number.isInteger(opencodePort) || opencodePort <= 0) {
+    console.error("mando daemon: missing or invalid --opencode-port");
+    process.exit(1);
+  }
+
+  const config = readConfig();
+  if (!config || !config.token) {
+    console.error("mando daemon: no token configured; run `mando connect` first");
+    process.exit(1);
+  }
+
+  const controller = new AbortController();
+  process.on("SIGTERM", () => controller.abort());
+  process.on("SIGINT", () => controller.abort());
+
+  await runDaemon({
+    hubUrl: config.hubUrl,
+    token: config.token,
+    machineName: config.machineName,
+    opencodePort,
+    opencodePassword: process.env.MANDO_OPENCODE_PASSWORD,
+    // Without this, a fatal hub rejection (version_mismatch,
+    // unauthorized, hello_timeout) was silently swallowed here: runDaemon
+    // defaults `onEvent` to a no-op, so nothing was ever printed for
+    // whoever is watching this process's own stderr (e.g. it run in the
+    // foreground for debugging, not through connect()'s detached spawn
+    // with stdio discarded -- that path relies on the error file instead,
+    // see connect.ts).
+    onEvent: (event) => {
+      if (event.type === "hub_error") {
+        console.error(`mando daemon: ${event.message}`);
+      }
+    },
+    signal: controller.signal,
+  });
+
+  process.exit(0);
+}
+
 if (import.meta.main) {
-  void (async () => {
-    const args = process.argv.slice(2);
-    const portIndex = args.indexOf("--opencode-port");
-    const opencodePort = portIndex >= 0 ? Number(args[portIndex + 1]) : NaN;
-    if (!Number.isInteger(opencodePort) || opencodePort <= 0) {
-      console.error("mando daemon: missing or invalid --opencode-port");
-      process.exit(1);
-    }
-
-    const config = readConfig();
-    if (!config || !config.token) {
-      console.error("mando daemon: no token configured; run `mando connect` first");
-      process.exit(1);
-    }
-
-    const controller = new AbortController();
-    process.on("SIGTERM", () => controller.abort());
-    process.on("SIGINT", () => controller.abort());
-
-    await runDaemon({
-      hubUrl: config.hubUrl,
-      token: config.token,
-      machineName: config.machineName,
-      opencodePort,
-      opencodePassword: process.env.MANDO_OPENCODE_PASSWORD,
-      // Without this, a fatal hub rejection (version_mismatch,
-      // unauthorized, hello_timeout) was silently swallowed here: runDaemon
-      // defaults `onEvent` to a no-op, so nothing was ever printed for
-      // whoever is watching this process's own stderr (e.g. it run in the
-      // foreground for debugging, not through connect()'s detached spawn
-      // with stdio discarded -- that path relies on the error file instead,
-      // see connect.ts).
-      onEvent: (event) => {
-        if (event.type === "hub_error") {
-          console.error(`mando daemon: ${event.message}`);
-        }
-      },
-      signal: controller.signal,
-    });
-
-    process.exit(0);
-  })();
+  void runDaemonMain(process.argv.slice(2));
 }

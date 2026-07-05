@@ -76,9 +76,13 @@ describe("connect (pairing flow)", () => {
         hub: url,
         opencodePort: 4096,
         pairingPollIntervalMs: 5,
+        // The post-spawn liveness check (see connect.ts) calls the real
+        // isProcessAlive on this returned pid -- use this test process's
+        // own pid so it's genuinely alive, rather than an arbitrary
+        // made-up number that may or may not exist on the host.
         spawnDaemon: (port) => {
           spawnCalls.push(port);
-          return 12345;
+          return process.pid;
         },
       });
 
@@ -131,7 +135,9 @@ describe("connect (pairing flow)", () => {
         hub: url,
         opencodePort: 4096,
         pairingPollIntervalMs: 5,
-        spawnDaemon: () => 1,
+        // See the pid comment above -- must be a genuinely alive pid for
+        // the post-spawn liveness check.
+        spawnDaemon: () => process.pid,
       });
 
       expect(result).toEqual({ status: "connected", machine: expect.any(String), uiUrl: url });
@@ -209,9 +215,11 @@ describe("connect (pairing flow)", () => {
     const spawnCalls: number[] = [];
     const result = await connect({
       opencodePort: 4097,
+      // See the pid comment further up -- must be a genuinely alive pid
+      // for the post-spawn liveness check.
       spawnDaemon: (port) => {
         spawnCalls.push(port);
-        return 1;
+        return process.pid;
       },
     });
 
@@ -312,7 +320,9 @@ describe("connect (pairing flow)", () => {
       opencodePort: 4097,
       errorFile: join(configDir!, "unused-error.json"),
       postSpawnGraceMs: 5,
-      spawnDaemon: () => 999998,
+      // See the pid comment further up -- must be a genuinely alive pid
+      // for the post-spawn liveness check.
+      spawnDaemon: () => process.pid,
     });
 
     expect(result).toEqual({ status: "connected", machine: "known-machine", uiUrl: "http://existing.invalid" });
@@ -331,10 +341,57 @@ describe("connect (pairing flow)", () => {
         spawnCalls.push(port);
         return 555;
       },
-      isProcessAlive: () => false, // stale pidfile -- the recorded pid is dead
+      // 999999 (the stale pidfile's recorded pid) is dead -- that's what
+      // makes the pidfile "stale" and lets connect() proceed to spawn a
+      // fresh daemon. 555 (the freshly spawned daemon's pid) must read as
+      // alive, or the post-spawn liveness check below would wrongly treat
+      // this brand new daemon as dead-on-arrival.
+      isProcessAlive: (pid: number) => pid !== 999999,
     });
 
     expect(result).toEqual({ status: "connected", machine: "known-machine", uiUrl: "http://existing.invalid" });
     expect(spawnCalls).toEqual([4097]);
+  });
+
+  it("reports an error instead of connected when the spawned daemon's pid is not alive at the end of the grace window", async () => {
+    const { writeConfig } = await import("../../src/config");
+    writeConfig({ hubUrl: "http://existing.invalid", token: "already-have-one", machineName: "known-machine" });
+
+    const result = await connect({
+      opencodePort: 4097,
+      postSpawnGraceMs: 5,
+      // Simulates a compiled binary's re-exec'd `_daemon` child dying
+      // before it ever gets far enough to write a fatal error (e.g. the
+      // re-exec itself failed silently, or the child exited before
+      // reaching the hub handshake) -- the error-file channel has nothing
+      // to report, so the liveness check is the only thing standing
+      // between this and a false "Connected".
+      spawnDaemon: () => 555555,
+      isProcessAlive: () => false,
+    });
+
+    expect(result.status).toBe("error");
+    if (result.status === "error") {
+      expect(result.message).toContain("daemon");
+    }
+    expect(logs.some((l) => l.includes("Connected as"))).toBe(false);
+  });
+
+  it("reports an error instead of connected when spawnDaemon itself throws", async () => {
+    const { writeConfig } = await import("../../src/config");
+    writeConfig({ hubUrl: "http://existing.invalid", token: "already-have-one", machineName: "known-machine" });
+
+    const result = await connect({
+      opencodePort: 4097,
+      spawnDaemon: () => {
+        throw new Error("re-exec of the current executable failed");
+      },
+    });
+
+    expect(result.status).toBe("error");
+    if (result.status === "error") {
+      expect(result.message).toContain("re-exec of the current executable failed");
+    }
+    expect(logs.some((l) => l.includes("Connected as"))).toBe(false);
   });
 });

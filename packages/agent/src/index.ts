@@ -16,6 +16,7 @@ import {
   readPidFile,
   readStateFile,
   removePidFile,
+  runDaemonMain,
 } from "./daemon";
 import { installCommand } from "./install-command";
 import { VERSION } from "./version";
@@ -162,6 +163,17 @@ async function main(): Promise<void> {
     case "install-command": {
       const path = installCommand();
       console.log(path);
+      return;
+    }
+    // Hidden -- deliberately left out of the usage string below. This is
+    // not a user-facing command: defaultSpawnDaemon (see connect.ts)
+    // re-executes the current executable as `<execPath> _daemon
+    // --opencode-port <n>` to run the daemon loop in-process, because a
+    // `bun build --compile` binary has no daemon.ts on disk to spawn as a
+    // separate script (import.meta.dir inside one is a virtual
+    // `/$bunfs/...` path).
+    case "_daemon": {
+      await runDaemonMain(rest);
       return;
     }
     default: {
