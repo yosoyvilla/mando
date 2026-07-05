@@ -222,7 +222,14 @@ describe("createHubClient", () => {
   describe("getProvider", () => {
     it("GETs /api/v1/provider and returns the parsed provider -- the encrypted key is never part of the response, so there is nothing for this client to leak", async () => {
       const fetchMock = mock<FetchFn>(() =>
-        Promise.resolve(jsonResponse({ baseUrl: "https://api.example.com/v1", imageModel: "flux-2-klein", hasKey: true })),
+        Promise.resolve(
+          jsonResponse({
+            baseUrl: "https://api.example.com/v1",
+            imageModel: "flux-2-klein",
+            chatModel: "gpt-4o-mini",
+            hasKey: true,
+          }),
+        ),
       );
       globalThis.fetch = fetchMock as unknown as typeof fetch;
 
@@ -232,7 +239,12 @@ describe("createHubClient", () => {
       expect(url).toBe("/api/v1/provider");
       expect(init.method).toBeUndefined(); // default GET
       expect(init.credentials).toBe("include");
-      expect(result).toEqual({ baseUrl: "https://api.example.com/v1", imageModel: "flux-2-klein", hasKey: true });
+      expect(result).toEqual({
+        baseUrl: "https://api.example.com/v1",
+        imageModel: "flux-2-klein",
+        chatModel: "gpt-4o-mini",
+        hasKey: true,
+      });
     });
 
     it("throws HubClientError carrying the hub's own error text on a non-2xx response", async () => {
@@ -279,6 +291,18 @@ describe("createHubClient", () => {
       expect(body).toEqual({ baseUrl: "https://api.example.com/v1", apiKey: "sk-secret" });
     });
 
+    it("includes chatModel in the PUT body only when the caller supplies one", async () => {
+      const fetchMock = mock<FetchFn>(() => Promise.resolve(jsonResponse({ ok: true })));
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      await createHubClient().setProvider({ baseUrl: "https://api.example.com/v1", chatModel: "gpt-4o-mini" });
+
+      const [, init = {}] = fetchMock.mock.calls[0];
+      const body = JSON.parse(init.body as string);
+      expect(body).toEqual({ baseUrl: "https://api.example.com/v1", chatModel: "gpt-4o-mini" });
+      expect("apiKey" in body).toBe(false);
+    });
+
     it("surfaces the server's validation message (e.g. an unsafe URL) as the thrown error's text", async () => {
       globalThis.fetch = mock(() =>
         Promise.resolve(jsonResponse({ error: "unsafe provider URL: only https URLs are allowed" }, 400)),
@@ -307,6 +331,39 @@ describe("createHubClient", () => {
       expect(url).toBe("/api/v1/provider");
       expect(init.method).toBe("DELETE");
       expect(init.credentials).toBe("include");
+    });
+  });
+
+  describe("listProviderModels", () => {
+    it("GETs /api/v1/provider/models and returns the raw list", async () => {
+      const fetchMock = mock<FetchFn>(() =>
+        Promise.resolve(jsonResponse([{ id: "gpt-4o-mini" }, { id: "text-embedding-3-small" }])),
+      );
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      const result = await createHubClient().listProviderModels();
+
+      const [url, init = {}] = fetchMock.mock.calls[0];
+      expect(url).toBe("/api/v1/provider/models");
+      expect(init.method).toBeUndefined(); // default GET
+      expect(init.credentials).toBe("include");
+      expect(result).toEqual([{ id: "gpt-4o-mini" }, { id: "text-embedding-3-small" }]);
+    });
+
+    it("throws HubClientError carrying the hub's own error text (e.g. provider_not_configured) on a non-2xx response", async () => {
+      globalThis.fetch = mock(() =>
+        Promise.resolve(jsonResponse({ error: "provider_not_configured" }, 400)),
+      ) as unknown as typeof fetch;
+
+      const client = createHubClient();
+      try {
+        await client.listProviderModels();
+        throw new Error("expected listProviderModels to reject");
+      } catch (err) {
+        expect(err).toBeInstanceOf(HubClientError);
+        expect((err as HubClientError).status).toBe(400);
+        expect((err as HubClientError).message).toBe("provider_not_configured");
+      }
     });
   });
 

@@ -7,6 +7,7 @@ export type ProviderSettings = {
   base_url: string;
   api_key_encrypted: string;
   image_model: string | null;
+  chat_model: string | null;
   updated_at: Date | string;
 };
 
@@ -23,15 +24,16 @@ export async function getProviderSettings(sql: Sql, userId: string): Promise<Pro
 export async function upsertProviderSettings(
   sql: Sql,
   userId: string,
-  input: { baseUrl: string; apiKeyEncrypted: string; imageModel: string | null },
+  input: { baseUrl: string; apiKeyEncrypted: string; imageModel: string | null; chatModel: string | null },
 ): Promise<ProviderSettings> {
   const rows = await sql`
-    insert into user_provider_settings (user_id, base_url, api_key_encrypted, image_model, updated_at)
-    values (${userId}, ${input.baseUrl}, ${input.apiKeyEncrypted}, ${input.imageModel}, now())
+    insert into user_provider_settings (user_id, base_url, api_key_encrypted, image_model, chat_model, updated_at)
+    values (${userId}, ${input.baseUrl}, ${input.apiKeyEncrypted}, ${input.imageModel}, ${input.chatModel}, now())
     on conflict (user_id) do update set
       base_url = excluded.base_url,
       api_key_encrypted = excluded.api_key_encrypted,
       image_model = excluded.image_model,
+      chat_model = excluded.chat_model,
       updated_at = now()
     returning *
   `;

@@ -11,6 +11,7 @@ import { proxyRoutes } from "./proxy/routes";
 import { providerRoutes } from "./providers/routes";
 import { imageRoutes } from "./images/routes";
 import { IMAGE_MAX_BYTES, type ProviderClientDeps } from "./images/provider-client";
+import type { ModelClientDeps } from "./providers/model-client";
 import { Registry } from "./tunnel/registry";
 import { tunnelWsHandler, websocket } from "./tunnel/ws";
 import { createRateLimiter, DEFAULT_RATE_LIMITS, type RateLimitConfig } from "./middleware/rate-limit";
@@ -86,6 +87,9 @@ export type AppDeps = {
   // server, which the real guard correctly always rejects (loopback,
   // plain http).
   imagesProviderDeps?: ProviderClientDeps;
+  // Same as imagesProviderDeps, but for providers/model-client.ts's SSRF
+  // guard on GET /api/v1/provider/models only.
+  providerModelsDeps?: ModelClientDeps;
 };
 
 // buildApp is the single place both the real server entry (src/index.ts,
@@ -131,7 +135,7 @@ export function buildApp(deps: AppDeps): Hono<{ Variables: AuthVariables }> {
   app.route("/", pairingRoutes(deps.sql));
   app.route("/", machineRoutes(deps.sql, registry));
   app.route("/", proxyRoutes(deps.sql, registry));
-  app.route("/", providerRoutes(deps.sql, deps.config));
+  app.route("/", providerRoutes(deps.sql, deps.config, deps.providerModelsDeps));
   app.route("/", imageRoutes(deps.sql, deps.config, deps.imagesProviderDeps));
   app.route("/", auditRoutes(deps.sql));
 

@@ -18,6 +18,7 @@ function stubClient(machines: Machine[]): HubClient {
     getProvider: mock(() => Promise.reject(new Error("not implemented"))),
     setProvider: mock(() => Promise.reject(new Error("not implemented"))),
     deleteProvider: mock(() => Promise.reject(new Error("not implemented"))),
+    listProviderModels: mock(() => Promise.reject(new Error("not implemented"))),
     generateImage: mock(() => Promise.reject(new Error("not implemented"))),
     editImage: mock(() => Promise.reject(new Error("not implemented"))),
     listImages: mock(() => Promise.reject(new Error("not implemented"))),

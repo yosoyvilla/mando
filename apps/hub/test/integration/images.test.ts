@@ -73,6 +73,7 @@ async function configureProvider(userId: string, baseUrl: string): Promise<void>
     baseUrl,
     apiKeyEncrypted: encryptSecret("sk-test-provider-key", config),
     imageModel: "test-model",
+    chatModel: null,
   });
 }
 

@@ -45,6 +45,7 @@ export class HubClientError extends Error {
 export type Provider = {
   baseUrl: string | null;
   imageModel: string | null;
+  chatModel: string | null;
   hasKey: boolean;
 };
 
@@ -55,6 +56,15 @@ export type SetProviderInput = {
   baseUrl: string;
   apiKey?: string;
   imageModel?: string | null;
+  chatModel?: string | null;
+};
+
+// Matches providerRoutes' GET /api/v1/provider/models: the raw list from
+// the provider's own /models endpoint (only `id` survives the hub's
+// parsing) -- chat-capability filtering (dropping embedding/whisper/
+// kokoro/rerank/flux-* ids) happens client-side, in provider-settings.tsx.
+export type ProviderModel = {
+  id: string;
 };
 
 // Matches imageRoutes' `toMetadata()` in apps/hub/src/images/routes.ts.
@@ -119,6 +129,9 @@ export interface HubClient {
   getProvider(): Promise<Provider>;
   setProvider(input: SetProviderInput): Promise<void>;
   deleteProvider(): Promise<void>;
+  // Throws HubClientError with status 400 (message "provider_not_configured")
+  // when the user has no provider row yet.
+  listProviderModels(): Promise<ProviderModel[]>;
   generateImage(input: GenerateImageInput): Promise<GeneratedImage>;
   editImage(input: EditImageInput): Promise<GeneratedImage>;
   listImages(): Promise<GeneratedImage[]>;
@@ -243,16 +256,17 @@ export function createHubClient(options: HubClientOptions = {}): HubClient {
     },
 
     async setProvider(input) {
-      // `apiKey`/`imageModel` are only included when the caller actually
-      // provided them -- matches providerRoutes' PUT contract, where an
-      // omitted `apiKey` means "keep the existing encrypted key" and an
-      // omitted `imageModel` means "leave it unchanged" (`null` explicitly
-      // clears it).
-      const body: { baseUrl: string; apiKey?: string; imageModel?: string | null } = {
+      // `apiKey`/`imageModel`/`chatModel` are only included when the caller
+      // actually provided them -- matches providerRoutes' PUT contract,
+      // where an omitted `apiKey` means "keep the existing encrypted key"
+      // and an omitted `imageModel`/`chatModel` means "leave it unchanged"
+      // (`null` explicitly clears it).
+      const body: { baseUrl: string; apiKey?: string; imageModel?: string | null; chatModel?: string | null } = {
         baseUrl: input.baseUrl,
       };
       if (input.apiKey) body.apiKey = input.apiKey;
       if (input.imageModel !== undefined) body.imageModel = input.imageModel;
+      if (input.chatModel !== undefined) body.chatModel = input.chatModel;
 
       const res = await request("/api/v1/provider", {
         method: "PUT",
@@ -264,6 +278,11 @@ export function createHubClient(options: HubClientOptions = {}): HubClient {
     async deleteProvider() {
       const res = await request("/api/v1/provider", { method: "DELETE" });
       await parseOrThrowWithMessage(res, "deleteProvider failed");
+    },
+
+    async listProviderModels() {
+      const res = await request("/api/v1/provider/models");
+      return parseOrThrowWithMessage<ProviderModel[]>(res, "listProviderModels failed");
     },
 
     async generateImage(input) {
