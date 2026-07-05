@@ -19,6 +19,7 @@ import type {
   SessionMessageShell,
   ToolFileContent,
   ToolTextContent,
+  LlmProviderMetadata,
 } from "@opencode-ai/sdk/v2";
 import { useMachineStore } from "@/stores/machine-store";
 import { getErrorMessage } from "@/lib/error-message";
@@ -279,7 +280,9 @@ function legacyAssistantContent(
 
   message.parts.forEach((part) => {
     if (part.type === "text") {
-      content.push({ type: "text", text: part.text });
+      // 1.17.13's SessionMessageAssistantText requires an `id`
+      // (1.14.41's did not); TextPart already carries a real one.
+      content.push({ type: "text", id: part.id, text: part.text });
       return;
     }
 
@@ -295,7 +298,11 @@ function legacyAssistantContent(
         name: part.tool,
         provider: {
           executed: part.state.status !== "pending",
-          metadata: part.metadata,
+          // The legacy v1 ToolPart.metadata is an untyped flat object;
+          // 1.17.13's LlmProviderMetadata nests it one level deeper.
+          // The legacy endpoint's actual payload shape is unchanged --
+          // only the v2 SDK's type declaration is stricter.
+          metadata: part.metadata as LlmProviderMetadata | undefined,
         },
         time: legacyToolTime(part, message.info.time.created),
         state: legacyToolStateToSession(part.state),
@@ -406,7 +413,10 @@ function legacyAssistantInfo(
     parentID: "",
     modelID: message.model.id,
     providerID: message.model.providerID,
-    mode: message.model.variant,
+    // 1.17.13's ModelRef.variant is optional (1.14.41's was required);
+    // fall back to "default" the same way legacyMessageToSessionMessage
+    // does above when constructing the reverse direction.
+    mode: message.model.variant ?? "default",
     agent: message.agent,
     path: {
       cwd: "",
@@ -736,6 +746,10 @@ export function sessionMessagesToLegacy(
         case "agent-switched":
         case "model-switched":
         case "compaction":
+        // "system" is a new SessionMessage variant in 1.17.13 (absent
+        // from 1.14.41's union); the legacy view has no representation
+        // for it, so it renders nothing like the other structural types.
+        case "system":
           return [];
       }
     },

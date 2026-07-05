@@ -541,6 +541,11 @@ function applyEvent(
       mutateMessages(machineId, event.properties.sessionID, (items) =>
         appendAssistantContent(items, {
           type: "text",
+          // 1.17.13's SessionMessageAssistantText requires an `id`
+          // (1.14.41's did not); the live server already sends a
+          // per-block textID on this event, so reuse it rather than
+          // inventing a value.
+          id: event.properties.textID,
           text: "",
         }),
       );
@@ -809,6 +814,11 @@ function applyEvent(
           type: "compaction",
           reason: event.properties.reason,
           summary: "",
+          // `recent` is only known once compaction ends (see
+          // session.next.compaction.ended below); 1.17.13's
+          // SessionMessageCompaction requires it up front, so seed it
+          // empty like `summary` above.
+          recent: "",
           time: {
             created: event.properties.timestamp,
           },
@@ -846,9 +856,10 @@ function applyEvent(
         return replaceMessageAt(items, index, {
           ...compaction,
           summary: event.properties.text,
-          ...(event.properties.include
-            ? { include: event.properties.include }
-            : {}),
+          // The live 1.17.13 server renamed this field from the
+          // 1.14.41 SDK's optional `include` to a required `recent`
+          // on both SessionMessageCompaction and this event.
+          recent: event.properties.recent,
         });
       });
       break;
