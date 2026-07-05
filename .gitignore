@@ -44,3 +44,4 @@ yarn-error.log*
 
 # Internal working docs (specs, plans) -- not part of the published repo
 docs/
+.omo/
