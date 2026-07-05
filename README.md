@@ -18,6 +18,7 @@ It is meant to be self-hosted. You run the server on a machine you control (your
 - [Deploying](#deploying) — running the hub on a server
 - [Managing users and machines](#managing-users-and-machines)
 - [Security model](#security-model)
+- [Troubleshooting](#troubleshooting) — `mando doctor` and what its checks mean
 - [Development](#development) and [Testing](#testing)
 
 ## Quick start
@@ -177,6 +178,7 @@ Commands:
 | `mando tui` | Starts an opencode terminal attached to the machine's local opencode server, mirroring live with the browser. See [Live mirroring with mando tui](#live-mirroring-with-mando-tui). |
 | `mando install-command` | Writes the `/mando` command file into opencode's commands directory so it can be run from inside a session. |
 | `mando autostart <enable\|disable\|status>` | Registers (or removes) the agent as a startup service, so the machine reconnects on its own after a reboot. See [Starting on boot](#starting-on-boot). |
+| `mando doctor` | Runs a set of diagnostic checks and reports PASS/FAIL/SKIP for each. See [Troubleshooting](#troubleshooting). |
 | `mando version` (or `mando --version`) | Prints the agent's release version. |
 
 Flags for `mando connect`:
@@ -186,7 +188,7 @@ Flags for `mando connect`:
 | `--hub <url>` | Hub address to connect to. Required for the first pairing unless `MANDO_HUB` is set. |
 | `--opencode-port <port>` | Local opencode port to use, skipping automatic detection. |
 | `--opencode-auto` | Detects the local opencode server, and starts one (`opencode serve`, in the current directory) if none is running. Used by the `/mando` command. |
-| `--json` | Machine-readable output. Accepted by `connect`, `disconnect`, and `status`. |
+| `--json` | Machine-readable output. Accepted by `connect`, `disconnect`, `status`, `autostart`, and `doctor`. |
 
 ### Starting on boot
 
@@ -337,6 +339,28 @@ If you do not need the hub on the public internet, put it behind a private overl
 - Revoking a machine immediately drops its live connection and invalidates its token.
 - A machine's local opencode server is never exposed to the internet. It only talks to the `mando` agent over `localhost`, and the agent only ever makes outbound connections to the hub. Nothing on the machine accepts inbound connections. Requests the hub relays are constrained to the local opencode server, so the tunnel cannot be steered at other hosts.
 - Run the hub behind TLS whenever it is reachable from the internet, and behind a private network or VPN if you do not need it public.
+
+## Troubleshooting
+
+When something isn't working — a machine shows offline, a session won't load, a prompt never gets a reply — run `mando doctor` on the affected machine first:
+
+```bash
+mando doctor
+```
+
+It runs a fixed set of checks, one per line, each reported as `PASS`, `FAIL`, or `SKIP` with a one-line detail, and exits with status 1 if anything failed (0 otherwise), so it also works as a quick health gate in a script. Pass `--json` for machine-readable output.
+
+| Check | What it means | If it fails |
+|---|---|---|
+| `config` | `~/.mando.json` exists and has a hub URL. | Run `mando connect --hub <url>` (see [Connecting a machine](#connecting-a-machine)). |
+| `token` | The machine has a saved pairing token. Skipped if there is no config at all. | Run `mando connect --hub <url>` and approve the pairing code in the browser. |
+| `hub` | The configured hub answers `GET /healthz` within 5 seconds. Skipped if no hub URL is configured. | Check the hub is running and reachable from this machine (DNS, TLS, firewall, reverse proxy) — see [Deploying](#deploying). |
+| `daemon` | The background connection process recorded in `~/.mando-pid` is still alive. | Run `mando connect` again. If this machine should reconnect on its own after a reboot, see [Starting on boot](#starting-on-boot). |
+| `opencode-server` | A local opencode server answers on the detected (or `MANDO_OPENCODE_PORT`-overridden) port. | Start one with `opencode serve`, or reconnect with `mando connect --opencode-auto` to have the agent start one for you. |
+| `opencode-binary` | The `opencode` binary is on `PATH` and runs `--version` successfully. | Install or fix your opencode installation; if it's somewhere non-standard, point `MANDO_OPENCODE_BIN` at it. |
+| `commands` | Both `/mando` command files are present in opencode's commands directory. | Run `mando install-command`. |
+
+A `FAIL` on `daemon`, `opencode-server`, or `hub` explains most "machine shows offline" or "session won't load" reports; the exact same information is also on `mando status` and (for the hub side) the web interface's machine list, but `doctor` is the one command that checks everything at once.
 
 ## Development
 

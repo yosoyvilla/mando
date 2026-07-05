@@ -8,10 +8,12 @@ export * from "./install-command";
 export * from "./tui";
 export * from "./version";
 export * from "./autostart";
+export * from "./doctor";
 
 import { readConfig } from "./config";
 import { connect, printResult, type ConnectOpts, type ConnectResult } from "./connect";
 import { enableAutostart, disableAutostart, autostartStatus, type AutostartResult } from "./autostart";
+import { runDoctor, formatDoctorReport } from "./doctor";
 import {
   defaultPidFilePath,
   defaultStateFilePath,
@@ -180,10 +182,10 @@ async function main(): Promise<void> {
       let result: AutostartResult;
       switch (sub) {
         case "enable":
-          result = enableAutostart({ json: opts.json, connectDirectory: opts.dir });
+          result = enableAutostart({ connectDirectory: opts.dir });
           break;
         case "disable":
-          result = disableAutostart({ json: opts.json });
+          result = disableAutostart();
           break;
         case "status":
           result = autostartStatus();
@@ -196,6 +198,16 @@ async function main(): Promise<void> {
       }
       printResult(opts.json, result as unknown as Record<string, unknown>, result.message);
       process.exitCode = result.status === "error" ? 1 : 0;
+      return;
+    }
+    case "doctor": {
+      const report = await runDoctor();
+      if (opts.json) {
+        console.log(JSON.stringify(report));
+      } else {
+        console.log(formatDoctorReport(report));
+      }
+      process.exitCode = report.ok ? 0 : 1;
       return;
     }
     // Hidden -- deliberately left out of the usage string below. This is
@@ -211,7 +223,7 @@ async function main(): Promise<void> {
     }
     default: {
       console.error(
-        "Usage: mando <connect|disconnect|status|tui|autostart|install-command|version> [--json] [--hub <url>] [--opencode-port <port>] [--opencode-auto] [--dir <path>]",
+        "Usage: mando <connect|disconnect|status|tui|autostart|doctor|install-command|version> [--json] [--hub <url>] [--opencode-port <port>] [--opencode-auto] [--dir <path>]",
       );
       process.exitCode = command ? 1 : 0;
       return;

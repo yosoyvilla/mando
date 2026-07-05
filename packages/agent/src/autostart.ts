@@ -16,13 +16,22 @@ export interface ExecResult {
 
 export type ExecRunner = (cmd: string, args: string[]) => ExecResult;
 
-function defaultExec(cmd: string, args: string[]): ExecResult {
-  const result = Bun.spawnSync([cmd, ...args]);
-  return { status: result.exitCode, stdout: result.stdout.toString(), stderr: result.stderr.toString() };
+// Exported for doctor.ts, which runs a diagnostic `<bin> --version` through
+// this same seam -- a missing binary is exactly one of the things doctor
+// checks for, so unlike autostart's own launchctl/systemctl/loginctl calls
+// (present on their respective OS in practice), a throw here is an
+// expected, not exceptional, outcome and must come back as a normal failed
+// ExecResult rather than an uncaught exception.
+export function defaultExec(cmd: string, args: string[]): ExecResult {
+  try {
+    const result = Bun.spawnSync([cmd, ...args]);
+    return { status: result.exitCode, stdout: result.stdout.toString(), stderr: result.stderr.toString() };
+  } catch (error) {
+    return { status: 1, stdout: "", stderr: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 export interface AutostartOpts {
-  json?: boolean;
   // Test-only injection point, mirroring connect.ts's ConnectOpts style --
   // the real default below is the only thing that ever touches
   // launchctl/systemctl/loginctl; tests always pass a fake.
