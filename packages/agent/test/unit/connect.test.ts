@@ -253,6 +253,48 @@ describe("connect (pairing flow)", () => {
     expect(logs.some((l) => l.includes("Pairing code"))).toBe(false);
   });
 
+  it("persists lastConnect (resolved opencode port + connect directory) into the config file on a successful connect", async () => {
+    const { writeConfig } = await import("../../src/config");
+    writeConfig({ hubUrl: "http://existing.invalid", token: "already-have-one", machineName: "known-machine" });
+
+    const result = await connect({
+      opencodePort: 4097,
+      spawnDaemon: () => process.pid,
+    });
+
+    expect(result.status).toBe("connected");
+    const config = readConfig();
+    expect(config?.lastConnect).toEqual({ opencodePort: 4097, connectDirectory: process.cwd() });
+  });
+
+  it("does not touch lastConnect when reporting an already-running connection (opencodePort was never re-resolved)", async () => {
+    const { writeConfig } = await import("../../src/config");
+    writeConfig({
+      hubUrl: "http://existing.invalid",
+      token: "already-have-one",
+      machineName: "known-machine",
+      lastConnect: { opencodePort: 9999, connectDirectory: "/previous/dir" },
+    });
+
+    const fakeRunningPid = 424243;
+    writeFileSync(process.env.MANDO_PID_FILE!, String(fakeRunningPid), "utf-8");
+
+    const result = await connect({
+      opencodePort: 4097,
+      spawnDaemon: () => process.pid,
+      isProcessAlive: (pid) => pid === fakeRunningPid,
+    });
+
+    expect(result).toEqual({
+      status: "connected",
+      machine: "known-machine",
+      uiUrl: "http://existing.invalid",
+      alreadyRunning: true,
+    });
+    const config = readConfig();
+    expect(config?.lastConnect).toEqual({ opencodePort: 9999, connectDirectory: "/previous/dir" });
+  });
+
   it("returns an error when no hub URL can be resolved", async () => {
     const result = await connect({});
     expect(result.status).toBe("error");

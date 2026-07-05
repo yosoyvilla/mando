@@ -367,6 +367,19 @@ export async function connect(opts: ConnectOpts = {}): Promise<ConnectResult> {
     return { status: "error", message };
   }
 
+  // Persist the exact setup this connect() just established -- the
+  // resolved opencode port and the directory it was run from -- so `mando
+  // autostart` (see autostart.ts) can replay it verbatim on the next boot,
+  // when there is no shell cwd or --opencode-port flag to inherit at all.
+  // Only reached on this fully-resolved success path (not the
+  // already-running short-circuit above, which never re-resolves
+  // opencodePort and would otherwise overwrite a good prior value with a
+  // stale one).
+  const configToUpdate = readConfig();
+  if (configToUpdate) {
+    writeConfig({ ...configToUpdate, lastConnect: { opencodePort, connectDirectory: process.cwd() } });
+  }
+
   printResult(
     opts.json,
     { status: "connected", machine: machineName, uiUrl: hubUrl },

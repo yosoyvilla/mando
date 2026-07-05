@@ -7,9 +7,11 @@ export * from "./daemon";
 export * from "./install-command";
 export * from "./tui";
 export * from "./version";
+export * from "./autostart";
 
 import { readConfig } from "./config";
 import { connect, printResult, type ConnectOpts, type ConnectResult } from "./connect";
+import { enableAutostart, disableAutostart, autostartStatus, type AutostartResult } from "./autostart";
 import {
   defaultPidFilePath,
   defaultStateFilePath,
@@ -173,6 +175,29 @@ async function main(): Promise<void> {
       const code = await runTui({ dir: opts.dir, opencodePort: opts.opencodePort });
       process.exit(code);
     }
+    case "autostart": {
+      const sub = opts.args?.[0];
+      let result: AutostartResult;
+      switch (sub) {
+        case "enable":
+          result = enableAutostart({ json: opts.json, connectDirectory: opts.dir });
+          break;
+        case "disable":
+          result = disableAutostart({ json: opts.json });
+          break;
+        case "status":
+          result = autostartStatus();
+          break;
+        default: {
+          console.error("Usage: mando autostart <enable|disable|status> [--json] [--dir <path>]");
+          process.exitCode = 1;
+          return;
+        }
+      }
+      printResult(opts.json, result as unknown as Record<string, unknown>, result.message);
+      process.exitCode = result.status === "error" ? 1 : 0;
+      return;
+    }
     // Hidden -- deliberately left out of the usage string below. This is
     // not a user-facing command: defaultSpawnDaemon (see connect.ts)
     // re-executes the current executable as `<execPath> _daemon
@@ -186,7 +211,7 @@ async function main(): Promise<void> {
     }
     default: {
       console.error(
-        "Usage: mando <connect|disconnect|status|tui|install-command|version> [--json] [--hub <url>] [--opencode-port <port>] [--opencode-auto] [--dir <path>]",
+        "Usage: mando <connect|disconnect|status|tui|autostart|install-command|version> [--json] [--hub <url>] [--opencode-port <port>] [--opencode-auto] [--dir <path>]",
       );
       process.exitCode = command ? 1 : 0;
       return;

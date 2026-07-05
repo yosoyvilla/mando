@@ -11,7 +11,7 @@ It is meant to be self-hosted. You run the server on a machine you control (your
 - [Quick start](#quick-start) — a working setup on one machine in about five minutes
 - [How it works](#how-it-works) — including [how this compares to opencode web and /share](#how-this-compares-to-opencode-web-and-share)
 - [Connecting a machine](#connecting-a-machine) — including a hub running on another server
-- [Installing the agent](#installing-the-agent) — building the binary, config, commands and flags
+- [Installing the agent](#installing-the-agent) — building the binary, config, commands and flags, and [starting on boot](#starting-on-boot)
 - [The /mando command](#the-mando-command)
 - [Live mirroring with mando tui](#live-mirroring-with-mando-tui) — and [how a session moves between terminal and browser](#how-a-session-moves-between-terminal-and-browser)
 - [Configuration](#configuration) — environment variables
@@ -176,6 +176,7 @@ Commands:
 | `mando status` | Reports whether the machine is configured, paired, and currently connected, and when it was last seen. Includes the agent's version. |
 | `mando tui` | Starts an opencode terminal attached to the machine's local opencode server, mirroring live with the browser. See [Live mirroring with mando tui](#live-mirroring-with-mando-tui). |
 | `mando install-command` | Writes the `/mando` command file into opencode's commands directory so it can be run from inside a session. |
+| `mando autostart <enable\|disable\|status>` | Registers (or removes) the agent as a startup service, so the machine reconnects on its own after a reboot. See [Starting on boot](#starting-on-boot). |
 | `mando version` (or `mando --version`) | Prints the agent's release version. |
 
 Flags for `mando connect`:
@@ -186,6 +187,27 @@ Flags for `mando connect`:
 | `--opencode-port <port>` | Local opencode port to use, skipping automatic detection. |
 | `--opencode-auto` | Detects the local opencode server, and starts one (`opencode serve`, in the current directory) if none is running. Used by the `/mando` command. |
 | `--json` | Machine-readable output. Accepted by `connect`, `disconnect`, and `status`. |
+
+### Starting on boot
+
+By default, the background connection `mando connect` starts does not survive a reboot — after the machine restarts, nothing reconnects it until you run `mando connect` (or `/mando`) again by hand. `mando autostart enable` fixes that by registering the agent as a startup service with your OS, so it reconnects on its own:
+
+```bash
+mando autostart enable
+```
+
+This writes a per-user service definition that runs `mando connect --opencode-auto` from the directory of your most recent successful `mando connect` (persisted alongside the rest of the agent's config) and asks the OS to start it at login/boot — on macOS, a `launchd` agent under `~/Library/LaunchAgents/`; on Linux, a `systemd --user` unit under `~/.config/systemd/user/`. Run `mando connect` at least once from the project directory you want autostart to use before enabling it.
+
+On Linux, enabling autostart also runs `loginctl enable-linger` for your user — without it, `systemd --user` units (and the manager that runs them) are torn down the moment your last login session ends, so the service would never actually run when nobody is logged in, which is the exact scenario autostart exists for. Disabling autostart does not revoke linger, since other user services on the machine may depend on it staying on; run `loginctl disable-linger $(whoami)` yourself if you want it off too.
+
+Other commands:
+
+```bash
+mando autostart status    # prints whether the startup service is currently registered
+mando autostart disable   # removes it
+```
+
+Windows is not supported yet — `mando autostart` refuses gracefully there rather than doing anything.
 
 ## The /mando command
 

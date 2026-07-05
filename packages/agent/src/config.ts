@@ -3,16 +3,35 @@ import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { z } from "zod";
 
+// The port + directory of the most recent successful `mando connect` (see
+// connect.ts) -- persisted so `mando autostart` (see autostart.ts) can
+// replay the exact same setup (`connect --opencode-auto` from that
+// directory) after a reboot, when there is no shell cwd or prior invocation
+// to inherit either from. opencodePort is optional because the
+// already-running-daemon short-circuit in connect() returns before
+// re-resolving it; connectDirectory is always known (it's just cwd).
+const lastConnectSchema = z.object({
+  opencodePort: z.number().optional(),
+  connectDirectory: z.string(),
+});
+
 const agentConfigSchema = z.object({
   hubUrl: z.string(),
   token: z.string().optional(),
   machineName: z.string(),
+  lastConnect: lastConnectSchema.optional(),
 });
+
+export interface LastConnect {
+  opencodePort?: number;
+  connectDirectory: string;
+}
 
 export interface AgentConfig {
   hubUrl: string;
   token?: string;
   machineName: string;
+  lastConnect?: LastConnect;
 }
 
 function getConfigPath(): string {
