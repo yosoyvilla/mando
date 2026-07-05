@@ -14,6 +14,11 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
   hub:
     build: { context: .., dockerfile: deploy/Dockerfile }
     environment:
@@ -27,4 +32,9 @@ services:
     ports: ["127.0.0.1:8080:8080"]
     depends_on:
       postgres: { condition: service_healthy }
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 volumes: { mando_pg: {} }

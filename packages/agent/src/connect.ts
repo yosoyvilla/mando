@@ -1,7 +1,11 @@
 import { hostname } from "node:os";
 import { join } from "node:path";
-import { readConfig, writeConfig, type AgentConfig } from "./config";
-import { detectOpencodePort as defaultDetectOpencodePort, ensureOpencodeServer as defaultEnsureOpencodeServer } from "./opencode";
+import { readConfig, writeConfig, storedOpencodePassword, type AgentConfig } from "./config";
+import {
+  detectOpencodePort as defaultDetectOpencodePort,
+  ensureOpencodeServer as defaultEnsureOpencodeServer,
+  type EnsuredOpencodeServer,
+} from "./opencode";
 import {
   clearLastError,
   defaultErrorFilePath,
@@ -40,6 +44,10 @@ export interface ConnectOpts {
   // everything the CLI layer already parsed, instead of index.ts parsing
   // argv a second time per-subcommand.
   dir?: string;
+  // Not used by connect() itself -- a home for the `--check` flag index.ts's
+  // CLI parser extracts for `mando upgrade` (see upgrade.ts), for the same
+  // reason as `dir` above.
+  checkOnly?: boolean;
   // Test-only injection points (see task-3.4-report.md "How the daemon
   // spawn is tested"). None of these change connect()'s documented
   // behavior; they only let tests swap the real network/process calls for
@@ -47,8 +55,8 @@ export interface ConnectOpts {
   pairingPollIntervalMs?: number;
   fetchFn?: typeof fetch;
   detectOpencodePort?: () => Promise<number | null>;
-  ensureOpencodeServer?: (directory: string) => Promise<number>;
-  spawnDaemon?: (opencodePort: number, connectDirectory: string) => number;
+  ensureOpencodeServer?: (directory: string) => Promise<EnsuredOpencodeServer>;
+  spawnDaemon?: (opencodePort: number, connectDirectory: string, opencodePassword?: string) => number;
   // Swaps out the real POSIX liveness check (daemon.ts's `isProcessAlive`,
   // itself `process.kill(pid, 0)` in a try/catch) used by the
   // already-running-daemon guard below, so tests can simulate a live or
@@ -159,7 +167,12 @@ async function pollUntilApproved(
 // import.meta.dir is a virtual `/$bunfs/...` path rather than a real
 // on-disk directory -- there is no `Bun.isStandaloneExecutable` (checked;
 // it does not exist on this bun version) to ask directly instead.
-function runningFromCompiledBinary(): boolean {
+//
+// Exported for upgrade.ts, which refuses to self-update at all when this
+// is false -- overwriting `process.execPath` only makes sense for an
+// installed, compiled binary; running from source, `process.execPath` is
+// just the `bun` interpreter itself, not anything mando shipped.
+export function runningFromCompiledBinary(): boolean {
   return import.meta.dir.startsWith("/$bunfs");
 }
 
@@ -198,7 +211,17 @@ function runningFromCompiledBinary(): boolean {
 // intermediate shell, `proc.pid` and the daemon's own `process.pid` are
 // the same process, so this is a redundant-but-harmless overwrite with an
 // identical value, not a race.
-export function defaultSpawnDaemon(opencodePort: number, connectDirectory: string): number {
+//
+// `opencodePassword`, when given, is the password ensureOpencodeServer
+// generated for a server THIS session auto-started (see opencode.ts and
+// the resolution in connect()/runTui below) -- it's injected into the
+// child's `env` as MANDO_OPENCODE_PASSWORD, the exact variable
+// daemon.ts's runDaemonMain already reads to enable Basic auth on
+// forwarded requests (see daemon.ts's DaemonOptions.opencodePassword).
+// Passed as an explicit spawn-time env override rather than by mutating
+// `process.env` here, so it never becomes visible via `ps`/argv and never
+// leaks into this process's own env for anything else that reads it.
+export function defaultSpawnDaemon(opencodePort: number, connectDirectory: string, opencodePassword?: string): number {
   const daemonArgs = ["_daemon", "--opencode-port", String(opencodePort), "--connect-dir", connectDirectory];
   const args = runningFromCompiledBinary()
     ? [process.execPath, ...daemonArgs]
@@ -212,8 +235,9 @@ export function defaultSpawnDaemon(opencodePort: number, connectDirectory: strin
     // MANDO_PID_FILE overrides set by a caller or a test) are invisible to
     // that default. Spreading process.env explicitly here means the child
     // sees the current env as of this call, including MANDO_HUB/
-    // MANDO_CONFIG/MANDO_PID_FILE/MANDO_OPENCODE_PASSWORD overrides.
-    env: { ...process.env },
+    // MANDO_CONFIG/MANDO_PID_FILE overrides, plus the generated
+    // MANDO_OPENCODE_PASSWORD below when one was resolved for this call.
+    env: { ...process.env, ...(opencodePassword ? { MANDO_OPENCODE_PASSWORD: opencodePassword } : {}) },
   });
   proc.unref();
   writePidFile(defaultPidFilePath(), proc.pid);
@@ -296,6 +320,13 @@ export async function connect(opts: ConnectOpts = {}): Promise<ConnectResult> {
   }
 
   let opencodePort = opts.opencodePort ?? (await detectOpencodePort());
+  // Only ever set for a server ensureOpencodeServer actually spawned this
+  // call, or a previously auto-started server this connect() recognizes as
+  // still being the same one it detected (see the storedOpencodePassword
+  // fallback below) -- an explicit --opencode-port, or a server merely
+  // detected that was never known to be auto-started, leaves this
+  // undefined, matching the "user-started serves unaffected" contract.
+  let opencodePassword: string | undefined;
   if (!opencodePort) {
     // Without --opencode-auto, no local server is a hard stop -- connect()
     // has always required the user to already have one running (or to pass
@@ -310,7 +341,16 @@ export async function connect(opts: ConnectOpts = {}): Promise<ConnectResult> {
     }
 
     try {
-      opencodePort = await ensureOpencodeServer(process.cwd());
+      const ensured = await ensureOpencodeServer(process.cwd());
+      opencodePort = ensured.port;
+      // ensureOpencodeServer only returns a password when it just spawned
+      // the server. When it instead reused one already running (e.g. a
+      // reconnect after the daemon died but the long-lived, unref'd
+      // `opencode serve` process it started earlier is still up), fall
+      // back to whatever password this same machine's last connect
+      // recorded for that exact port -- see config.ts's
+      // storedOpencodePassword for why the port match matters.
+      opencodePassword = ensured.password ?? storedOpencodePassword(existing, opencodePort);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       printResult(opts.json, { status: "error", message }, `Error: ${message}`);
@@ -326,7 +366,7 @@ export async function connect(opts: ConnectOpts = {}): Promise<ConnectResult> {
 
   let daemonPid: number;
   try {
-    daemonPid = spawnDaemon(opencodePort, process.cwd());
+    daemonPid = spawnDaemon(opencodePort, process.cwd(), opencodePassword);
   } catch (error) {
     // Compiled installs where re-exec'ing the current executable itself
     // fails (e.g. permissions, a missing execPath) must not be reported as
@@ -365,6 +405,19 @@ export async function connect(opts: ConnectOpts = {}): Promise<ConnectResult> {
     const message = "daemon process is not running after spawn -- check that the mando binary can re-execute itself (`_daemon`)";
     printResult(opts.json, { status: "error", message }, `Error: ${message}`);
     return { status: "error", message };
+  }
+
+  // Persist the exact setup this connect() just established -- the
+  // resolved opencode port and the directory it was run from -- so `mando
+  // autostart` (see autostart.ts) can replay it verbatim on the next boot,
+  // when there is no shell cwd or --opencode-port flag to inherit at all.
+  // Only reached on this fully-resolved success path (not the
+  // already-running short-circuit above, which never re-resolves
+  // opencodePort and would otherwise overwrite a good prior value with a
+  // stale one).
+  const configToUpdate = readConfig();
+  if (configToUpdate) {
+    writeConfig({ ...configToUpdate, lastConnect: { opencodePort, connectDirectory: process.cwd(), opencodePassword } });
   }
 
   printResult(

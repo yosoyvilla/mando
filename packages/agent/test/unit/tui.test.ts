@@ -46,6 +46,8 @@ beforeAll(() => {
       '} else if (args[0] === "attach") {',
       "  const argvFile = process.env.MANDO_TEST_ARGV_FILE;",
       '  if (argvFile) require("node:fs").writeFileSync(argvFile, JSON.stringify(args), "utf-8");',
+      "  const envFile = process.env.MANDO_TEST_ENV_FILE;",
+      '  if (envFile) require("node:fs").writeFileSync(envFile, process.env.OPENCODE_SERVER_PASSWORD ?? "", "utf-8");',
       '  const delay = Number(process.env.MANDO_TEST_EXIT_DELAY_MS ?? "0");',
       '  const code = Number(process.env.MANDO_TEST_EXIT_CODE ?? "0");',
       "  setTimeout(() => process.exit(code), delay);",
@@ -63,16 +65,19 @@ afterAll(() => {
 
 let workDir: string;
 let argvFile: string;
+let envFile: string;
 let originalConsoleError: typeof console.error;
 let errors: string[] = [];
 
 beforeEach(() => {
   workDir = mkdtempSync(join(tmpdir(), "mando-tui-test-"));
   argvFile = join(workDir, "argv.json");
+  envFile = join(workDir, "env-password.txt");
   process.env.MANDO_CONFIG = join(workDir, "config.json");
   process.env.MANDO_PID_FILE = join(workDir, "pid");
   process.env.MANDO_OPENCODE_BIN = shimPath;
   process.env.MANDO_TEST_ARGV_FILE = argvFile;
+  process.env.MANDO_TEST_ENV_FILE = envFile;
   errors = [];
   originalConsoleError = console.error;
   console.error = (...args: unknown[]) => {
@@ -87,6 +92,7 @@ afterEach(() => {
   delete process.env.MANDO_OPENCODE_BIN;
   delete process.env.MANDO_OPENCODE_PORT;
   delete process.env.MANDO_TEST_ARGV_FILE;
+  delete process.env.MANDO_TEST_ENV_FILE;
   delete process.env.MANDO_TEST_EXIT_DELAY_MS;
   delete process.env.MANDO_TEST_EXIT_CODE;
   rmSync(workDir, { recursive: true, force: true });
@@ -94,6 +100,10 @@ afterEach(() => {
 
 function readArgv(): string[] {
   return JSON.parse(readFileSync(argvFile, "utf-8"));
+}
+
+function readAttachEnvPassword(): string {
+  return readFileSync(envFile, "utf-8");
 }
 
 // Reserves a real, currently-healthy "opencode server" for tests that need
@@ -187,6 +197,62 @@ describe("runTui", () => {
 
       expect(code).toBe(0);
       expect(spawnCalls).toEqual([]);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  it("passes the generated opencode password from ensureOpencodeServer into spawnDaemon and the attach child's OPENCODE_SERVER_PASSWORD env", async () => {
+    writeConfig({ hubUrl: "http://hub.invalid", token: "tok", machineName: "m" });
+    const spawnCalls: Array<[number, string, string | undefined]> = [];
+
+    const code = await runTui({
+      dir: workDir,
+      ensureOpencodeServer: async () => ({ port: 9999, password: "e".repeat(32) }),
+      spawnDaemon: (p, d, pw) => {
+        spawnCalls.push([p, d, pw]);
+        return process.pid;
+      },
+    });
+
+    expect(code).toBe(0);
+    expect(spawnCalls).toEqual([[9999, workDir, "e".repeat(32)]]);
+    expect(readAttachEnvPassword()).toBe("e".repeat(32));
+    expect(readArgv()).toEqual(["attach", "http://127.0.0.1:9999", "--dir", workDir]);
+  });
+
+  it("falls back to a previously persisted opencode password when ensureOpencodeServer detects the same port without returning a fresh one", async () => {
+    writeConfig({
+      hubUrl: "http://hub.invalid",
+      token: "tok",
+      machineName: "m",
+      lastConnect: { opencodePort: 9999, connectDirectory: workDir, opencodePassword: "f".repeat(32) },
+    });
+    const spawnCalls: Array<[number, string, string | undefined]> = [];
+
+    const code = await runTui({
+      dir: workDir,
+      // Simulates ensureOpencodeServer merely detecting an
+      // already-running, previously auto-started server -- it never
+      // spawned it this call, so no fresh password comes back.
+      ensureOpencodeServer: async () => ({ port: 9999 }),
+      spawnDaemon: (p, d, pw) => {
+        spawnCalls.push([p, d, pw]);
+        return process.pid;
+      },
+    });
+
+    expect(code).toBe(0);
+    expect(spawnCalls).toEqual([[9999, workDir, "f".repeat(32)]]);
+    expect(readAttachEnvPassword()).toBe("f".repeat(32));
+  });
+
+  it("never resolves a password for an explicit --opencode-port (user-started servers unaffected)", async () => {
+    const { server, port } = startHealthyStub();
+    try {
+      const code = await runTui({ dir: workDir, opencodePort: port });
+      expect(code).toBe(0);
+      expect(readAttachEnvPassword()).toBe("");
     } finally {
       server.stop(true);
     }

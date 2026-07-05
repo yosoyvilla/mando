@@ -7,9 +7,15 @@ export * from "./daemon";
 export * from "./install-command";
 export * from "./tui";
 export * from "./version";
+export * from "./autostart";
+export * from "./doctor";
+export * from "./upgrade";
 
 import { readConfig } from "./config";
 import { connect, printResult, type ConnectOpts, type ConnectResult } from "./connect";
+import { enableAutostart, disableAutostart, autostartStatus, type AutostartResult } from "./autostart";
+import { runDoctor, formatDoctorReport } from "./doctor";
+import { runUpgrade } from "./upgrade";
 import {
   defaultPidFilePath,
   defaultStateFilePath,
@@ -127,6 +133,9 @@ function parseArgs(argv: string[]): ConnectOpts {
       case "--dir":
         opts.dir = argv[++i];
         break;
+      case "--check":
+        opts.checkOnly = true;
+        break;
       default:
         positional.push(arg);
     }
@@ -173,6 +182,44 @@ async function main(): Promise<void> {
       const code = await runTui({ dir: opts.dir, opencodePort: opts.opencodePort });
       process.exit(code);
     }
+    case "autostart": {
+      const sub = opts.args?.[0];
+      let result: AutostartResult;
+      switch (sub) {
+        case "enable":
+          result = enableAutostart({ connectDirectory: opts.dir });
+          break;
+        case "disable":
+          result = disableAutostart();
+          break;
+        case "status":
+          result = autostartStatus();
+          break;
+        default: {
+          console.error("Usage: mando autostart <enable|disable|status> [--json] [--dir <path>]");
+          process.exitCode = 1;
+          return;
+        }
+      }
+      printResult(opts.json, result as unknown as Record<string, unknown>, result.message);
+      process.exitCode = result.status === "error" ? 1 : 0;
+      return;
+    }
+    case "doctor": {
+      const report = await runDoctor();
+      if (opts.json) {
+        console.log(JSON.stringify(report));
+      } else {
+        console.log(formatDoctorReport(report));
+      }
+      process.exitCode = report.ok ? 0 : 1;
+      return;
+    }
+    case "upgrade": {
+      const result = await runUpgrade({ json: opts.json, checkOnly: opts.checkOnly });
+      process.exitCode = result.status === "error" ? 1 : 0;
+      return;
+    }
     // Hidden -- deliberately left out of the usage string below. This is
     // not a user-facing command: defaultSpawnDaemon (see connect.ts)
     // re-executes the current executable as `<execPath> _daemon
@@ -186,7 +233,7 @@ async function main(): Promise<void> {
     }
     default: {
       console.error(
-        "Usage: mando <connect|disconnect|status|tui|install-command|version> [--json] [--hub <url>] [--opencode-port <port>] [--opencode-auto] [--dir <path>]",
+        "Usage: mando <connect|disconnect|status|tui|autostart|doctor|upgrade|install-command|version> [--json] [--hub <url>] [--opencode-port <port>] [--opencode-auto] [--dir <path>] [--check]",
       );
       process.exitCode = command ? 1 : 0;
       return;

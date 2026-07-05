@@ -11,13 +11,14 @@ It is meant to be self-hosted. You run the server on a machine you control (your
 - [Quick start](#quick-start) — a working setup on one machine in about five minutes
 - [How it works](#how-it-works) — including [how this compares to opencode web and /share](#how-this-compares-to-opencode-web-and-share)
 - [Connecting a machine](#connecting-a-machine) — including a hub running on another server
-- [Installing the agent](#installing-the-agent) — building the binary, config, commands and flags
+- [Installing the agent](#installing-the-agent) — building the binary, config, commands and flags, [updating the agent](#updating-the-agent), and [starting on boot](#starting-on-boot)
 - [The /mando command](#the-mando-command)
 - [Live mirroring with mando tui](#live-mirroring-with-mando-tui) — and [how a session moves between terminal and browser](#how-a-session-moves-between-terminal-and-browser)
 - [Configuration](#configuration) — environment variables
-- [Deploying](#deploying) — running the hub on a server
+- [Deploying](#deploying) — running the hub on a server, including [logs, backups, and uptime monitoring](#logs-backups-and-uptime-monitoring)
 - [Managing users and machines](#managing-users-and-machines)
 - [Security model](#security-model)
+- [Troubleshooting](#troubleshooting) — `mando doctor` and what its checks mean
 - [Development](#development) and [Testing](#testing)
 
 ## Quick start
@@ -114,6 +115,8 @@ A machine needs to know one thing before it can pair: the address of your hub. T
 
 If none of these is set, `mando connect` (and therefore `/mando`) stops with `no hub URL configured`. This is why the first pairing always passes `--hub` (or sets `MANDO_HUB`); after that the address is saved and `/mando` alone is enough.
 
+A machine has exactly one connect directory at a time — not one per session or per terminal. Every successful `mando connect` records the directory it was run from as that machine's connect directory, overwriting whatever the previous one saved; the most recent `mando connect` (or `/mando`) wins — unless a daemon from the previous connect is still running, in which case that connect is a no-op and the old directory stays active. Run `mando disconnect` first to switch projects. The web interface's session list for that machine scopes to whichever directory won most recently, so connecting a second project from the same machine moves the session list over to it rather than adding to it.
+
 ### Hub on the same machine (local)
 
 ```bash
@@ -176,6 +179,9 @@ Commands:
 | `mando status` | Reports whether the machine is configured, paired, and currently connected, and when it was last seen. Includes the agent's version. |
 | `mando tui` | Starts an opencode terminal attached to the machine's local opencode server, mirroring live with the browser. See [Live mirroring with mando tui](#live-mirroring-with-mando-tui). |
 | `mando install-command` | Writes the `/mando` command file into opencode's commands directory so it can be run from inside a session. |
+| `mando autostart <enable\|disable\|status>` | Registers (or removes) the agent as a startup service, so the machine reconnects on its own after a reboot. See [Starting on boot](#starting-on-boot). |
+| `mando doctor` | Runs a set of diagnostic checks and reports PASS/FAIL/SKIP for each. See [Troubleshooting](#troubleshooting). |
+| `mando upgrade` | Downloads and installs the latest release in place of the running binary. See [Updating the agent](#updating-the-agent). |
 | `mando version` (or `mando --version`) | Prints the agent's release version. |
 
 Flags for `mando connect`:
@@ -185,7 +191,41 @@ Flags for `mando connect`:
 | `--hub <url>` | Hub address to connect to. Required for the first pairing unless `MANDO_HUB` is set. |
 | `--opencode-port <port>` | Local opencode port to use, skipping automatic detection. |
 | `--opencode-auto` | Detects the local opencode server, and starts one (`opencode serve`, in the current directory) if none is running. Used by the `/mando` command. |
-| `--json` | Machine-readable output. Accepted by `connect`, `disconnect`, and `status`. |
+| `--json` | Machine-readable output. Accepted by `connect`, `disconnect`, `status`, `autostart`, `doctor`, and `upgrade`. |
+
+### Updating the agent
+
+`mando upgrade` downloads the latest [GitHub release](https://github.com/yosoyvilla/mando/releases/latest), verifies it runs before touching anything, and replaces the running binary with it:
+
+```bash
+mando upgrade          # checks, downloads, verifies, and installs the update
+mando upgrade --check  # reports whether an update is available, without installing it
+```
+
+This only works on a binary installed via the one-line install script or `bun run build:binary` above — running `mando` from source (`bun run src/index.ts`) has nothing for it to overwrite, and it refuses with a clear message instead. It also refuses outright if a newer release simply isn't out yet, printing "Already up to date" instead of re-downloading the binary you already have.
+
+Before replacing anything, it downloads the new binary to `<path>.new` next to the current one, `chmod +x`s it, and runs its own `--version` to confirm it actually starts and reports the version it claims to be — a failed download or a corrupted asset never gets any further than that. It then best-effort copies the current binary aside to `<path>.bak` (a rollback copy — if that copy fails, for example the disk is full, the upgrade still proceeds) before atomically renaming the verified download over the running binary's path. If the install directory isn't writable (a common case for `/usr/local/bin`), it reports that clearly and points you back at the [one-line install script](#one-line-install-recommended), which already knows how to escalate with `sudo` or fall back to `~/.local/bin`.
+
+### Starting on boot
+
+By default, the background connection `mando connect` starts does not survive a reboot — after the machine restarts, nothing reconnects it until you run `mando connect` (or `/mando`) again by hand. `mando autostart enable` fixes that by registering the agent as a startup service with your OS, so it reconnects on its own:
+
+```bash
+mando autostart enable
+```
+
+This writes a per-user service definition that runs `mando connect --opencode-auto` from the directory of your most recent successful `mando connect` (persisted alongside the rest of the agent's config) and asks the OS to start it at login/boot — on macOS, a `launchd` agent under `~/Library/LaunchAgents/`; on Linux, a `systemd --user` unit under `~/.config/systemd/user/`. Run `mando connect` at least once from the project directory you want autostart to use before enabling it.
+
+On Linux, enabling autostart also runs `loginctl enable-linger` for your user — without it, `systemd --user` units (and the manager that runs them) are torn down the moment your last login session ends, so the service would never actually run when nobody is logged in, which is the exact scenario autostart exists for. Disabling autostart does not revoke linger, since other user services on the machine may depend on it staying on; run `loginctl disable-linger $(whoami)` yourself if you want it off too.
+
+Other commands:
+
+```bash
+mando autostart status    # prints whether the startup service is currently registered
+mando autostart disable   # removes it
+```
+
+Windows is not supported yet — `mando autostart` refuses gracefully there rather than doing anything.
 
 ## The /mando command
 
@@ -300,6 +340,24 @@ Every tagged release also publishes the hub image to `ghcr.io/yosoyvilla/mando-h
 
 If you do not need the hub on the public internet, put it behind a private overlay network (such as a Tailscale-style tailnet) or a VPN and skip public exposure entirely. Machines still reach it the same way; only the network path changes.
 
+### Logs, backups, and uptime monitoring
+
+The Compose file caps both containers' logs at 10MB per file, 3 files (Docker's `json-file` driver, `max-size`/`max-file`) — without this, an unattended hub's logs grow unbounded and can fill the host's disk over time.
+
+Back up the Postgres database with the included script, which dumps and gzips it via `docker compose exec` and keeps the last 14 days:
+
+```bash
+0 3 * * * /opt/mando/backup-postgres.sh
+```
+
+`MANDO_COMPOSE_FILE` and `MANDO_BACKUP_DIR` override the compose file location and backup destination (defaults: `/opt/mando/docker-compose.yml` and `/opt/mando/backups`) if you deploy from somewhere else.
+
+For uptime monitoring, point an external checker — [healthchecks.io](https://healthchecks.io), [UptimeRobot](https://uptimerobot.com), or similar — at `GET /healthz` on your `PUBLIC_URL`; either service pings it on a schedule and alerts you when it stops responding. If you would rather push from the host instead, a cron entry works the same way:
+
+```bash
+*/5 * * * * curl -fsS "$PING_URL" >/dev/null
+```
+
 ## Managing users and machines
 
 - **The first user** is the admin you create with `MANDO_ADMIN_EMAIL` / `MANDO_ADMIN_PASSWORD`.
@@ -315,6 +373,28 @@ If you do not need the hub on the public internet, put it behind a private overl
 - Revoking a machine immediately drops its live connection and invalidates its token.
 - A machine's local opencode server is never exposed to the internet. It only talks to the `mando` agent over `localhost`, and the agent only ever makes outbound connections to the hub. Nothing on the machine accepts inbound connections. Requests the hub relays are constrained to the local opencode server, so the tunnel cannot be steered at other hosts.
 - Run the hub behind TLS whenever it is reachable from the internet, and behind a private network or VPN if you do not need it public.
+
+## Troubleshooting
+
+When something isn't working — a machine shows offline, a session won't load, a prompt never gets a reply — run `mando doctor` on the affected machine first:
+
+```bash
+mando doctor
+```
+
+It runs a fixed set of checks, one per line, each reported as `PASS`, `FAIL`, or `SKIP` with a one-line detail, and exits with status 1 if anything failed (0 otherwise), so it also works as a quick health gate in a script. Pass `--json` for machine-readable output.
+
+| Check | What it means | If it fails |
+|---|---|---|
+| `config` | `~/.mando.json` exists and has a hub URL. | Run `mando connect --hub <url>` (see [Connecting a machine](#connecting-a-machine)). |
+| `token` | The machine has a saved pairing token. Skipped if there is no config at all. | Run `mando connect --hub <url>` and approve the pairing code in the browser. |
+| `hub` | The configured hub answers `GET /healthz` within 5 seconds. Skipped if no hub URL is configured. | Check the hub is running and reachable from this machine (DNS, TLS, firewall, reverse proxy) — see [Deploying](#deploying). |
+| `daemon` | The background connection process recorded in `~/.mando-pid` is still alive. | Run `mando connect` again. If this machine should reconnect on its own after a reboot, see [Starting on boot](#starting-on-boot). |
+| `opencode-server` | A local opencode server answers on the detected (or `MANDO_OPENCODE_PORT`-overridden) port. | Start one with `opencode serve`, or reconnect with `mando connect --opencode-auto` to have the agent start one for you. |
+| `opencode-binary` | The `opencode` binary is on `PATH` and runs `--version` successfully. | Install or fix your opencode installation; if it's somewhere non-standard, point `MANDO_OPENCODE_BIN` at it. |
+| `commands` | Both `/mando` command files are present in opencode's commands directory. | Run `mando install-command`. |
+
+A `FAIL` on `daemon`, `opencode-server`, or `hub` explains most "machine shows offline" or "session won't load" reports; the exact same information is also on `mando status` and (for the hub side) the web interface's machine list, but `doctor` is the one command that checks everything at once.
 
 ## Development
 
@@ -353,6 +433,7 @@ Each package has its own test suite, runnable with `bun test` from that package'
 - Unit tests cover individual functions and modules in isolation (for example the agent's port-detection and reconnect-backoff logic, or the hub's password hashing).
 - Integration tests exercise real components together: the hub's integration tests run against a real PostgreSQL database (by default `postgres://mando:mando@localhost:5433/mando`, matching the port Docker Compose publishes) and make real HTTP and WebSocket requests against the running application.
 - End-to-end tests in `e2e/` use Playwright to drive the full stack in a real browser — logging in, pairing, watching a machine go online and offline, and sending a prompt whose reply streams back — against a real hub, a real agent, and a stub opencode server.
+- A weekly canary workflow re-runs the real-opencode suite against the LATEST opencode release (not the pinned version) and opens an issue if it breaks, so drift between opencode and this project is caught early.
 - A separate gated suite (`e2e/playwright.real.config.ts`) boots an actual `opencode serve` and proves the handoff end to end against it: a session created the way a terminal creates one is discovered, its messages load, and a prompt sent through the hub reaches it. CI runs this on every push, so drift between the stub and real opencode cannot go unnoticed.
 
 To run the hub's integration tests locally, start a database first:

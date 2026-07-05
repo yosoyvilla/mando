@@ -243,6 +243,64 @@ describe("connect + daemon + disconnect (real subprocess, fake hub)", () => {
   );
 
   it(
+    "threads a generated opencode password through the real spawned daemon so forwarded requests carry Basic auth",
+    async () => {
+      // Exercises the real (un-injected) defaultSpawnDaemon -- the actual
+      // env-passing path this task adds -- rather than a fake spawnDaemon,
+      // so this proves the password genuinely survives a real subprocess
+      // spawn (via MANDO_OPENCODE_PASSWORD) into daemon.ts's own forward
+      // auth, not just that connect()'s in-process argument plumbing is
+      // wired correctly (already covered by test/unit/connect.test.ts).
+      fakeHub = startFakeHub();
+      const password = "d".repeat(32);
+      stubOpencode = Bun.serve({
+        port: 0,
+        fetch(req) {
+          const path = new URL(req.url).pathname;
+          if (path === "/doc") return new Response("ok", { status: 200 });
+          if (path === "/secure") {
+            const expected = `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`;
+            return req.headers.get("authorization") === expected
+              ? new Response("secure-ok", { status: 200 })
+              : new Response("unauthorized", { status: 401 });
+          }
+          return new Response("not found", { status: 404 });
+        },
+      });
+
+      const machineName = "password-itest-machine";
+      writeConfig({ hubUrl: fakeHub.url, token: "pre-seeded-token", machineName });
+
+      // ensureOpencodeServer is faked here (this suite never spawns a real
+      // `opencode` binary) -- everything downstream of it (spawnDaemon,
+      // the real daemon subprocess, forward.ts's Basic-auth header) is
+      // real.
+      const result = await connect({
+        opencodeAuto: true,
+        detectOpencodePort: async () => null,
+        ensureOpencodeServer: async () => ({ port: stubOpencode!.port!, password }),
+      });
+      expect(result).toEqual({ status: "connected", machine: machineName, uiUrl: fakeHub.url });
+
+      daemonPid = readPidFile(process.env.MANDO_PID_FILE!);
+      expect(daemonPid).not.toBeNull();
+
+      await waitFor(() => fakeHub!.isOnline(machineName), 8000);
+
+      const machineId = fakeHub.findMachineByName(machineName)!;
+      const response = await fakeHub.proxyRequest(machineId, "/secure");
+      expect(response).toEqual({ status: 200, body: "secure-ok" });
+
+      const disconnectResult = disconnect();
+      expect(disconnectResult).toEqual({ status: "disconnected" });
+
+      await waitFor(() => !fakeHub!.isOnline(machineName), 8000);
+      await waitFor(() => !isAlive(daemonPid!), 4000);
+    },
+    20_000,
+  );
+
+  it(
     "does not spawn a second daemon when connect() is called again while one is already running",
     async () => {
       fakeHub = startFakeHub();

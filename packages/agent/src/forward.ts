@@ -57,7 +57,12 @@ function filterHeaders(raw: Record<string, string>, excluded: Set<string>): Reco
   return headers;
 }
 
-function basicAuthHeader(password: string): string {
+// Exported for doctor.ts's opencode-server check, which needs the exact
+// same Basic-auth encoding to verify a stored password actually
+// authenticates against the running server -- kept as one implementation
+// so both call sites can never disagree on the scheme (e.g. the "opencode"
+// username below) or drift apart.
+export function basicAuthHeader(password: string): string {
   return `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`;
 }
 

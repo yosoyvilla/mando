@@ -47,9 +47,12 @@ import {
   useAgents,
   usePermissions,
   useQuestions,
+  useReplyPermission,
+  useReplyQuestion,
   useSelectedMachine,
   useSessionStatuses,
   useSessions,
+  questionsPath,
 } from "@/hooks/use-opencode";
 import {
   getDefaultUserSelectableAgentName,
@@ -359,6 +362,8 @@ function QuestionAnswerForm({
   );
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const connectDirectory = useSelectedMachine()?.connectDirectory;
+  const replyQuestion = useReplyQuestion();
 
   const toggleOption = (qIdx: number, label: string, isMulti: boolean) => {
     setSelections((prev) => {
@@ -387,7 +392,7 @@ function QuestionAnswerForm({
       if (!match) {
         const latestQuestions = await opencodeJson<QuestionRequest[]>(
           machineId,
-          "/question",
+          questionsPath(connectDirectory),
         );
         match =
           latestQuestions.find((q) => q.tool?.callID === callID) ??
@@ -409,10 +414,7 @@ function QuestionAnswerForm({
         return [];
       });
 
-      await opencodeJson(machineId, `/question/${match.id}/reply`, {
-        method: "POST",
-        body: JSON.stringify({ answers }),
-      });
+      await replyQuestion(match.id, answers);
 
       onResolved(match.id);
       mutateSessionMessages(machineId, sessionId);
@@ -522,25 +524,21 @@ function QuestionAnswerForm({
 
 function PermissionRequestForm({
   permission,
-  machineId,
   onResolved,
 }: {
   permission: PermissionRequest;
-  machineId: string;
   onResolved: (requestId: string) => void;
 }) {
   const [submitting, setSubmitting] = useState<PermissionReply | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const replyPermission = useReplyPermission();
 
   const handleReply = async (reply: PermissionReply) => {
     setSubmitting(reply);
     setSubmitError(null);
 
     try {
-      await opencodeJson(machineId, `/permission/${permission.id}/reply`, {
-        method: "POST",
-        body: JSON.stringify({ reply }),
-      });
+      await replyPermission(permission.id, reply);
 
       onResolved(permission.id);
     } catch (err) {
@@ -758,7 +756,6 @@ const MessageItem = memo(function MessageItem({
             <PermissionRequestForm
               key={permission.id}
               permission={permission}
-              machineId={machineId}
               onResolved={onPermissionResolved}
             />
           ))}
@@ -1213,7 +1210,6 @@ function SessionPage() {
                 <PermissionRequestForm
                   key={permission.id}
                   permission={permission}
-                  machineId={machineId}
                   onResolved={handlePermissionResolved}
                 />
               ))}

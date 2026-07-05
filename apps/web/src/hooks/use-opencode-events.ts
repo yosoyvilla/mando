@@ -16,8 +16,14 @@ import {
   getMessagesKey,
   sortSessionMessages,
 } from "@/hooks/use-session-messages";
-import { sessionsPath, sortSessions } from "@/hooks/use-opencode";
+import {
+  permissionsPath,
+  questionsPath,
+  sessionsPath,
+  sortSessions,
+} from "@/hooks/use-opencode";
 import { opencodeEvents } from "@/lib/opencode-fetch";
+import { notifyIfBackgrounded } from "@/lib/notify";
 
 // The installed `@opencode-ai/sdk`'s `Event` union already types this
 // payload field as `properties` -- confirmed against a live opencode
@@ -39,12 +45,21 @@ function sessionsKey(machineId: string, connectDirectory?: string | null) {
   return [machineId, sessionsPath(connectDirectory)] as const;
 }
 
-function permissionsKey(machineId: string) {
-  return [machineId, "/permission"] as const;
+// `connectDirectory`-scoped, same reasoning as `sessionsKey` above --
+// `usePermissions`/`useQuestions` (use-opencode.ts) build their SWR key from
+// the exact same `permissionsPath`/`questionsPath` helpers, so an
+// event-driven `mutate(permissionsKey(...))`/`mutate(questionsKey(...))`
+// call here always targets the cache entry those hooks actually subscribe
+// to.
+function permissionsKey(
+  machineId: string,
+  connectDirectory?: string | null,
+) {
+  return [machineId, permissionsPath(connectDirectory)] as const;
 }
 
-function questionsKey(machineId: string) {
-  return [machineId, "/question"] as const;
+function questionsKey(machineId: string, connectDirectory?: string | null) {
+  return [machineId, questionsPath(connectDirectory)] as const;
 }
 
 function gitDiffKey(machineId: string) {
@@ -91,10 +106,11 @@ function mutateSessions(
 
 function mutatePermissions(
   machineId: string,
+  connectDirectory: string | null | undefined,
   updater: (items: PermissionRequest[]) => PermissionRequest[],
 ) {
   void mutate<PermissionRequest[]>(
-    permissionsKey(machineId),
+    permissionsKey(machineId, connectDirectory),
     (current) => updater(current ?? []),
     { revalidate: false },
   );
@@ -102,10 +118,11 @@ function mutatePermissions(
 
 function mutateQuestions(
   machineId: string,
+  connectDirectory: string | null | undefined,
   updater: (items: QuestionRequest[]) => QuestionRequest[],
 ) {
   void mutate<QuestionRequest[]>(
-    questionsKey(machineId),
+    questionsKey(machineId, connectDirectory),
     (current) => updater(current ?? []),
     { revalidate: false },
   );
@@ -309,8 +326,8 @@ function revalidateInstance(
 ) {
   void mutate(sessionsKey(machineId, connectDirectory));
   void mutate(sessionStatusKey(machineId));
-  void mutate(permissionsKey(machineId));
-  void mutate(questionsKey(machineId));
+  void mutate(permissionsKey(machineId, connectDirectory));
+  void mutate(questionsKey(machineId, connectDirectory));
   // Message keys are `[machineId, "/session/:id/message"]` array keys --
   // SWR's global mutate filter receives that original key tuple back
   // (not a serialized string), so match on its shape directly.
@@ -365,6 +382,9 @@ function applyEvent(
         [event.properties.sessionID]: { type: "idle" },
       }));
       revalidateMessagesNow(machineId, event.properties.sessionID);
+      notifyIfBackgrounded("Run finished", {
+        tag: `mando-session-idle-${event.properties.sessionID}`,
+      });
       break;
 
     case "session.next.agent.switched":
@@ -521,6 +541,11 @@ function applyEvent(
       mutateMessages(machineId, event.properties.sessionID, (items) =>
         appendAssistantContent(items, {
           type: "text",
+          // 1.17.13's SessionMessageAssistantText requires an `id`
+          // (1.14.41's did not); the live server already sends a
+          // per-block textID on this event, so reuse it rather than
+          // inventing a value.
+          id: event.properties.textID,
           text: "",
         }),
       );
@@ -789,6 +814,11 @@ function applyEvent(
           type: "compaction",
           reason: event.properties.reason,
           summary: "",
+          // `recent` is only known once compaction ends (see
+          // session.next.compaction.ended below); 1.17.13's
+          // SessionMessageCompaction requires it up front, so seed it
+          // empty like `summary` above.
+          recent: "",
           time: {
             created: event.properties.timestamp,
           },
@@ -826,9 +856,10 @@ function applyEvent(
         return replaceMessageAt(items, index, {
           ...compaction,
           summary: event.properties.text,
-          ...(event.properties.include
-            ? { include: event.properties.include }
-            : {}),
+          // The live 1.17.13 server renamed this field from the
+          // 1.14.41 SDK's optional `include` to a required `recent`
+          // on both SessionMessageCompaction and this event.
+          recent: event.properties.recent,
         });
       });
       break;
@@ -859,26 +890,29 @@ function applyEvent(
       break;
 
     case "permission.asked":
-      mutatePermissions(machineId, (items) =>
+      mutatePermissions(machineId, connectDirectory, (items) =>
         upsertById(items, event.properties),
       );
+      notifyIfBackgrounded("Approval needed", {
+        tag: `mando-permission-asked-${event.properties.id}`,
+      });
       break;
 
     case "permission.replied":
-      mutatePermissions(machineId, (items) =>
+      mutatePermissions(machineId, connectDirectory, (items) =>
         removeById(items, event.properties.requestID),
       );
       break;
 
     case "question.asked":
-      mutateQuestions(machineId, (items) =>
+      mutateQuestions(machineId, connectDirectory, (items) =>
         upsertById(items, event.properties),
       );
       break;
 
     case "question.replied":
     case "question.rejected":
-      mutateQuestions(machineId, (items) =>
+      mutateQuestions(machineId, connectDirectory, (items) =>
         removeById(items, event.properties.requestID),
       );
       break;

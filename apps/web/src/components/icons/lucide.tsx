@@ -1,5 +1,7 @@
 import type { LucideIcon, LucideProps } from "lucide-react";
 import {
+  Bell,
+  BellOff,
   Check,
   ChevronDown,
   ChevronRight,
@@ -69,6 +71,8 @@ export const ArrowDownCircleIcon = createAppIcon(CircleArrowDown);
 export const ArrowPathIcon = createAppIcon(RefreshCw);
 export const ArrowRightStartOnRectangleIcon = createAppIcon(LogOut);
 export const ArrowUpCircleIcon = createAppIcon(CircleArrowUp);
+export const BellIcon = createAppIcon(Bell);
+export const BellOffIcon = createAppIcon(BellOff);
 export const ChatBubbleLeftIcon = createAppIcon(MessageSquare);
 export const CheckIcon = createAppIcon(Check);
 export const ChevronDownIcon = createAppIcon(ChevronDown);

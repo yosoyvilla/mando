@@ -1,0 +1,99 @@
+name: Canary
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  TEST_DATABASE_URL: postgres://mando:mando@localhost:5432/mando
+
+jobs:
+  # Mirrors ci.yml's e2e-real-opencode job step for step -- same postgres
+  # service, same TEST_DATABASE_URL -- so this stays an apples-to-apples
+  # comparison. The only intentional difference is the opencode install
+  # below: unpinned here (latest), pinned there (1.17.13), so this job is
+  # the one that notices when a new opencode release breaks the real
+  # hub -> agent -> opencode handoff before a pin bump would.
+  e2e-real-opencode:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: mando
+          POSTGRES_PASSWORD: mando
+          POSTGRES_DB: mando
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mando -d mando"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+
+      - name: Install workspace dependencies
+        run: bun install
+
+      - name: Install e2e dependencies
+        working-directory: e2e
+        run: bun install
+
+      - name: Install Playwright browsers
+        working-directory: e2e
+        run: bunx playwright install --with-deps chromium
+
+      # Deliberately unpinned -- this is the one job that should drift with
+      # upstream opencode releases, so it always installs whatever the
+      # installer resolves as latest. MANDO_OPENCODE_BIN is still set as the
+      # belt-and-suspenders absolute-path fallback, matching ci.yml.
+      - name: Install opencode (latest)
+        run: |
+          curl -fsSL https://opencode.ai/install | bash
+          echo "MANDO_OPENCODE_BIN=$HOME/.opencode/bin/opencode" >> "$GITHUB_ENV"
+          "$HOME/.opencode/bin/opencode" --version
+
+      - name: Real opencode handoff test
+        working-directory: e2e
+        run: bunx playwright test --config playwright.real.config.ts
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-real-opencode
+          path: |
+            e2e/playwright-report
+            e2e/test-results
+          if-no-files-found: ignore
+
+      # Files (or comments on) one issue per failure mode rather than a new
+      # issue per run -- search by title first so a string of weekly
+      # failures updates the same tracker instead of spamming the tracker.
+      - name: Report failure as a GitHub issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="Canary: real-opencode suite failed against opencode latest"
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          existing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$title in:title" --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "Still failing against opencode latest: $run_url"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "The weekly canary run against the latest opencode release failed: $run_url"
+          fi

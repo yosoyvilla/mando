@@ -11,7 +11,7 @@
   "dependencies": {
     "@fontsource-variable/geist-mono": "^5.2.8",
     "@fontsource/geist-sans": "^5.2.5",
-    "@opencode-ai/sdk": "1.14.41",
+    "@opencode-ai/sdk": "1.17.13",
     "@pierre/diffs": "^1.2.12",
     "@tanstack/react-router": "^1.170.17",
     "@tanstack/react-router-devtools": "^1.167.0",

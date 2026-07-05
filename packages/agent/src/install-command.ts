@@ -32,7 +32,11 @@ Without using any tools, quote verbatim and in chronological order every message
 // OPENCODE_CONFIG_DIR -- opencode's own override env var -- rather than
 // inventing a mando-specific one, so this respects whatever config
 // location the user (or opencode itself) has already configured.
-function getOpencodeConfigDir(): string {
+//
+// Exported so doctor.ts (see its "commands installed" check) resolves the
+// exact same commands directory this module writes into, instead of
+// duplicating the OPENCODE_CONFIG_DIR-resolution logic a second time.
+export function getOpencodeConfigDir(): string {
   return process.env.OPENCODE_CONFIG_DIR ?? join(homedir(), ".config", "opencode");
 }
 
