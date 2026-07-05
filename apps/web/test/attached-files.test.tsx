@@ -1,5 +1,5 @@
-import { describe, it, expect } from "bun:test";
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, mock } from "bun:test";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { AttachedFiles } from "../src/components/attached-files";
 import type { FilePart } from "../src/hooks/use-session-messages";
 
@@ -122,6 +122,40 @@ describe("AttachedFiles", () => {
     render(<AttachedFiles parts={[part]} />);
 
     expect(screen.getByText("application/pdf")).toBeTruthy();
+  });
+
+  it("offers 'Edit in Images' for a data:image part when onEditInImages is provided, and calls it with that part", () => {
+    const onEditInImages = mock(() => {});
+    const part = makeFilePart({
+      mime: "image/png",
+      filename: "screenshot.png",
+      url: "data:image/png;base64,AAAA",
+    });
+    render(<AttachedFiles parts={[part]} onEditInImages={onEditInImages} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit in Images: screenshot.png" }));
+    expect(onEditInImages).toHaveBeenCalledWith(part);
+  });
+
+  it("does not render 'Edit in Images' when onEditInImages is omitted", () => {
+    const part = makeFilePart({
+      mime: "image/png",
+      filename: "screenshot.png",
+      url: "data:image/png;base64,AAAA",
+    });
+    render(<AttachedFiles parts={[part]} />);
+    expect(screen.queryByRole("button", { name: /Edit in Images/ })).toBeNull();
+  });
+
+  it("does not render 'Edit in Images' for a hosted (non-data-URL) image, even with the callback provided", () => {
+    const onEditInImages = mock(() => {});
+    const part = makeFilePart({
+      mime: "image/png",
+      filename: "shot.png",
+      url: "https://example.com/shot.png",
+    });
+    render(<AttachedFiles parts={[part]} onEditInImages={onEditInImages} />);
+    expect(screen.queryByRole("button", { name: /Edit in Images/ })).toBeNull();
   });
 
   it("renders multiple parts independently", () => {

@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/field";
 import { Link } from "@/components/ui/link";
-import { ArrowPathIcon, TrashIcon } from "@/components/icons/lucide";
+import { ArrowPathIcon, IconPen, SendIcon, TrashIcon } from "@/components/icons/lucide";
 import {
   Select,
   SelectContent,
@@ -14,9 +14,36 @@ import {
   SelectTrigger,
 } from "@/components/ui/select";
 import { getErrorMessage } from "@/lib/error-message";
+import { useEditSourceStore } from "@/stores/edit-source-store";
+import { SendToSessionDialog } from "@/components/send-to-session-dialog";
 
 interface ImagesGalleryProps {
   client?: HubClient;
+}
+
+// The edit form's source image can come from three places: a freshly
+// attached local file (the original flow), an existing gallery item
+// (Task 3: edit-from-gallery, via imageRoutes' sourceImageId branch -- no
+// re-upload needed), or a data URL handed off from a session message
+// (Task 3: session-image -> edit-in-Images, via edit-source-store.ts).
+type EditSource =
+  | { kind: "file"; file: File }
+  | { kind: "existing"; image: GeneratedImage }
+  | { kind: "dataUrl"; dataUrl: string; mime: string; filename: string };
+
+function editSourceLabel(source: EditSource): string {
+  if (source.kind === "file") return source.file.name;
+  if (source.kind === "existing") return source.image.prompt ?? source.image.id;
+  return source.filename;
+}
+
+// Turns a data: URL (session hand-off) into a File the same `editImage({
+// image })` multipart path already accepts -- `fetch()` can read a data:
+// URL directly, so no manual base64 decoding is needed here.
+async function dataUrlToFile(dataUrl: string, mime: string, filename: string): Promise<File> {
+  const res = await fetch(dataUrl);
+  const blob = await res.blob();
+  return new File([blob], filename, { type: mime });
 }
 
 type GalleryState =
@@ -96,7 +123,7 @@ export function ImagesGallery({ client = defaultHubClient }: ImagesGalleryProps)
   const [regeneratingId, setRegeneratingId] = useState<string | null>(null);
   const [regenerateNotice, setRegenerateNotice] = useState<Notice | null>(null);
 
-  const [editFile, setEditFile] = useState<File | null>(null);
+  const [editSource, setEditSource] = useState<EditSource | null>(null);
   const [editPrompt, setEditPrompt] = useState("");
   const [editing, setEditing] = useState(false);
   const [editNotice, setEditNotice] = useState<Notice | null>(null);
@@ -104,6 +131,20 @@ export function ImagesGallery({ client = defaultHubClient }: ImagesGalleryProps)
 
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [enlarged, setEnlarged] = useState<GeneratedImage | null>(null);
+  const [sendTarget, setSendTarget] = useState<GeneratedImage | null>(null);
+
+  const consumePendingEditSource = useEditSourceStore((s) => s.consumePendingEditSource);
+
+  // Task 3: session-image -> edit-in-Images. Runs once on mount -- the
+  // store's consume-and-clear semantics mean a later remount (e.g.
+  // navigating away and back) won't re-apply a stale hand-off.
+  useEffect(() => {
+    const pending = consumePendingEditSource();
+    if (pending) {
+      setEditSource({ kind: "dataUrl", ...pending });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function load() {
     setState({ status: "loading" });
@@ -182,35 +223,62 @@ export function ImagesGallery({ client = defaultHubClient }: ImagesGalleryProps)
   function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0] ?? null;
     if (!file) {
-      setEditFile(null);
+      setEditSource(null);
       return;
     }
 
     const result = validateAttachment(file, []);
     if (!result.ok) {
       setEditNotice({ kind: "error", message: result.error });
-      setEditFile(null);
+      setEditSource(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
       return;
     }
 
     setEditNotice(null);
-    setEditFile(file);
+    setEditSource({ kind: "file", file });
+  }
+
+  // Edit-from-gallery (Task 3): reuse an existing image as the edit source
+  // instead of re-uploading it -- imageRoutes' POST /images/edits already
+  // accepts {sourceImageId, prompt, size} as a JSON alternative to the
+  // multipart {image} upload.
+  function handleEditFromGallery(image: GeneratedImage) {
+    setEditNotice(null);
+    setEditSource({ kind: "existing", image });
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  function clearEditSource() {
+    setEditSource(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
   async function handleEdit(event: React.FormEvent) {
     event.preventDefault();
     const trimmed = editPrompt.trim();
-    if (!trimmed || !editFile || editing) return;
+    if (!trimmed || !editSource || editing) return;
 
     setEditing(true);
     setEditNotice(null);
     try {
-      const image = await client.editImage({ prompt: trimmed, size: resolvedSize(), image: editFile });
+      const image =
+        editSource.kind === "file"
+          ? await client.editImage({ prompt: trimmed, size: resolvedSize(), image: editSource.file })
+          : editSource.kind === "existing"
+            ? await client.editImage({
+                prompt: trimmed,
+                size: resolvedSize(),
+                sourceImageId: editSource.image.id,
+              })
+            : await client.editImage({
+                prompt: trimmed,
+                size: resolvedSize(),
+                image: await dataUrlToFile(editSource.dataUrl, editSource.mime, editSource.filename),
+              });
       addImages([image]);
       setEditPrompt("");
-      setEditFile(null);
-      if (fileInputRef.current) fileInputRef.current.value = "";
+      clearEditSource();
     } catch (err) {
       setEditNotice(noticeFromError(err, "Failed to edit image."));
     } finally {
@@ -304,6 +372,14 @@ export function ImagesGallery({ client = defaultHubClient }: ImagesGalleryProps)
         className="max-w-xl space-y-3 border-t border-border pt-6"
       >
         <h2 className="text-sm font-medium">Edit an image</h2>
+        {editSource && editSource.kind !== "file" && (
+          <div className="flex items-center gap-2 rounded-md border border-border bg-muted/25 px-3 py-2 text-sm text-fg/90">
+            <span className="truncate">Editing: {editSourceLabel(editSource)}</span>
+            <Button type="button" size="xs" intent="plain" onPress={clearEditSource}>
+              Clear
+            </Button>
+          </div>
+        )}
         <div className="space-y-1">
           <Label htmlFor="images-edit-file">Source image</Label>
           <input
@@ -324,7 +400,7 @@ export function ImagesGallery({ client = defaultHubClient }: ImagesGalleryProps)
             placeholder="Describe how to edit the attached image..."
           />
         </div>
-        <Button type="submit" isDisabled={editing || !editFile || !editPrompt.trim()}>
+        <Button type="submit" isDisabled={editing || !editSource || !editPrompt.trim()}>
           {editing ? "Editing..." : "Edit"}
         </Button>
         {editNotice && <NoticeBanner notice={editNotice} />}
@@ -381,6 +457,24 @@ export function ImagesGallery({ client = defaultHubClient }: ImagesGalleryProps)
                   <Button
                     type="button"
                     size="sq-xs"
+                    intent="secondary"
+                    aria-label={`Edit image: ${image.prompt ?? image.id}`}
+                    onPress={() => handleEditFromGallery(image)}
+                  >
+                    <IconPen className="size-3.5" />
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sq-xs"
+                    intent="secondary"
+                    aria-label={`Send to session: ${image.prompt ?? image.id}`}
+                    onPress={() => setSendTarget(image)}
+                  >
+                    <SendIcon className="size-3.5" />
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sq-xs"
                     intent="danger"
                     aria-label={`Delete image: ${image.prompt ?? image.id}`}
                     onPress={() => handleDelete(image.id)}
@@ -395,6 +489,15 @@ export function ImagesGallery({ client = defaultHubClient }: ImagesGalleryProps)
         )}
         {regenerateNotice && <div className="mt-3"><NoticeBanner notice={regenerateNotice} /></div>}
       </div>
+
+      {sendTarget && (
+        <SendToSessionDialog
+          image={sendTarget}
+          isOpen={!!sendTarget}
+          onClose={() => setSendTarget(null)}
+          client={client}
+        />
+      )}
 
       {enlarged && (
         <div

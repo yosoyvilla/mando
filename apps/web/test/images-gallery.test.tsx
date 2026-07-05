@@ -2,6 +2,7 @@ import { describe, it, expect, mock } from "bun:test";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { ImagesGallery } from "../src/components/images-gallery";
 import { HubClientError, type GeneratedImage, type HubClient } from "../src/lib/hub-client";
+import { useEditSourceStore } from "../src/stores/edit-source-store";
 
 function stubClient(overrides: Partial<HubClient> = {}): HubClient {
   return {
@@ -142,6 +143,47 @@ describe("ImagesGallery", () => {
       expect(client.editImage).toHaveBeenCalledWith({ prompt: "make it blue", size: undefined, image: file });
     });
     expect(await screen.findByAltText("make it blue")).toBeInTheDocument();
+  });
+
+  it("Edit on a gallery item sets it as the edit source, and submitting posts sourceImageId (not a re-upload)", async () => {
+    const existing = image({ id: "img1", prompt: "a cat" });
+    const edited = image({ id: "img-edited", prompt: "a cat but blue", sourceKind: "edit" });
+    const client = stubClient({
+      listImages: mock(() => Promise.resolve([existing])),
+      editImage: mock(() => Promise.resolve(edited)),
+    });
+    render(<ImagesGallery client={client} />);
+
+    const editButton = await screen.findByRole("button", { name: "Edit image: a cat" });
+    fireEvent.click(editButton);
+
+    expect(screen.getByText(/Editing: a cat/)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Edit prompt"), { target: { value: "a cat but blue" } });
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+
+    await waitFor(() => {
+      expect(client.editImage).toHaveBeenCalledWith({
+        prompt: "a cat but blue",
+        size: undefined,
+        sourceImageId: "img1",
+      });
+    });
+    expect(await screen.findByAltText("a cat but blue")).toBeInTheDocument();
+  });
+
+  it("preloads a pending edit source from the store (session-image -> edit-in-Images hand-off) on mount", async () => {
+    useEditSourceStore.getState().setPendingEditSource({
+      dataUrl: "data:image/png;base64,AAAA",
+      mime: "image/png",
+      filename: "shot.png",
+    });
+
+    render(<ImagesGallery client={stubClient()} />);
+
+    expect(await screen.findByText(/Editing: shot.png/)).toBeInTheDocument();
+    // Consumed exactly once -- the store no longer holds it.
+    expect(useEditSourceStore.getState().pendingEditSource).toBeNull();
   });
 
   it("deletes an image and removes it from the gallery", async () => {
