@@ -11,11 +11,11 @@ It is meant to be self-hosted. You run the server on a machine you control (your
 - [Quick start](#quick-start) — a working setup on one machine in about five minutes
 - [How it works](#how-it-works) — including [how this compares to opencode web and /share](#how-this-compares-to-opencode-web-and-share)
 - [Connecting a machine](#connecting-a-machine) — including a hub running on another server
-- [Installing the agent](#installing-the-agent) — building the binary, config, commands and flags, and [starting on boot](#starting-on-boot)
+- [Installing the agent](#installing-the-agent) — building the binary, config, commands and flags, [updating the agent](#updating-the-agent), and [starting on boot](#starting-on-boot)
 - [The /mando command](#the-mando-command)
 - [Live mirroring with mando tui](#live-mirroring-with-mando-tui) — and [how a session moves between terminal and browser](#how-a-session-moves-between-terminal-and-browser)
 - [Configuration](#configuration) — environment variables
-- [Deploying](#deploying) — running the hub on a server
+- [Deploying](#deploying) — running the hub on a server, including [logs, backups, and uptime monitoring](#logs-backups-and-uptime-monitoring)
 - [Managing users and machines](#managing-users-and-machines)
 - [Security model](#security-model)
 - [Troubleshooting](#troubleshooting) — `mando doctor` and what its checks mean
@@ -114,6 +114,8 @@ A machine needs to know one thing before it can pair: the address of your hub. T
 3. the `MANDO_HUB` environment variable.
 
 If none of these is set, `mando connect` (and therefore `/mando`) stops with `no hub URL configured`. This is why the first pairing always passes `--hub` (or sets `MANDO_HUB`); after that the address is saved and `/mando` alone is enough.
+
+A machine has exactly one connect directory at a time — not one per session or per terminal. Every successful `mando connect` records the directory it was run from as that machine's connect directory, overwriting whatever the previous one saved; the most recent `mando connect` (or `/mando`) always wins. The web interface's session list for that machine scopes to whichever directory won most recently, so connecting a second project from the same machine moves the session list over to it rather than adding to it.
 
 ### Hub on the same machine (local)
 

@@ -21,7 +21,7 @@ exposed to the network.
 |---|---|
 | `apps/hub` | `@mando/hub`. Bun + Hono server: REST/SSE API, the `/ws/agent` WebSocket tunnel endpoint, session auth, pairing, the tunnel registry (in-memory table of live agent connections) and proxy, PostgreSQL data layer (`postgres.js`), migrations (`apps/hub/migrations/`). Serves the built web SPA as static files plus an SPA fallback. `buildApp(deps)` in `src/app.ts` is the single place the Hono app is constructed — both `src/index.ts` and every integration test use it. |
 | `apps/web` | `@mando/web`. Static SPA (React 19 + Vite + TanStack Router), served by the hub in production. Talks to the hub via `HubClient` in `src/lib/hub-client.ts`. |
-| `packages/agent` | `@mando/agent`. The `mando` CLI: `connect` / `disconnect` / `status` / `tui` / `install-command`, a session-scoped background daemon that holds the tunnel open, and local opencode health/forwarding. Config lives in `~/.mando.json`. Compiles to a standalone binary via `bun build --compile`. |
+| `packages/agent` | `@mando/agent`. The `mando` CLI: `connect` / `disconnect` / `status` / `tui` / `install-command` / `autostart` / `doctor` / `upgrade`, a session-scoped background daemon that holds the tunnel open, and local opencode health/forwarding. Config lives in `~/.mando.json`. Compiles to a standalone binary via `bun build --compile`. |
 | `packages/protocol` | `@mando/protocol`. Shared Zod schemas for every tunnel frame (`src/frames.ts`) plus `parseFrame` / `serializeFrame`. The hub and the agent both depend on this — it is the only source of truth for the wire format. |
 | `packages/opencode-plugin` | `@mando/opencode-plugin`. The `/mando` opencode slash-command template (`commands/mando.md`), installed into a user's opencode config by `mando install-command`. |
 | `deploy` | `Dockerfile`, `docker-compose.yml` (hub + `postgres:17`, host port `5433`), and `k8s/` manifests (Deployment pinned to 1 replica, Service, NetworkPolicy, ServiceAccount, example Secret/Ingress). |
@@ -50,6 +50,16 @@ exposed to the network.
   body field is silently ignored), and `POST /session/:id/message` without
   `noReply: true` synchronously attempts an assistant reply (harness code
   must always pass `noReply: true`).
+- **`/permission` and `/question` are directory-scoped too** — verified live
+  on opencode 1.17.13. `GET /permission` and `GET /question` without
+  `?directory=<abs>` list only the serve-cwd project, not the machine's
+  connect directory; `POST /permission/:id/reply` and `POST /question/:id/reply`
+  (and `/question/:id/reject`) without the matching `?directory=` 404 with
+  `{"_tag":"PermissionNotFoundError"}` even when the request id is real.
+  `permissionsPath`/`questionsPath` in `apps/web/src/hooks/use-opencode.ts`
+  are the single place that builds these paths from `machine.connectDirectory`
+  — every list and reply call must go through them, never a bare
+  `/permission` or `/question` literal.
 - **`/mando-refresh` is a replay, not a redraw.** A plain TUI has no control
   surface (its internal port 404s everything, `/tui/*` included — verified),
   so the command works through the one shared channel: the session store.
@@ -228,6 +238,11 @@ doesn't validate against `FrameSchema` must never reach handler logic.
   with mode `0o600` — see `packages/agent/src/config.ts`. Don't relax that.
 - Never log secrets: machine tokens, `MANDO_OPENCODE_PASSWORD`, session
   cookies, `COOKIE_SECRET`, `DATABASE_URL`.
+- An auto-started local opencode server's password (`ensureOpencodeServer` in
+  `packages/agent/src/opencode.ts`) is generated fresh per launch and handed
+  to the child exclusively via spawn-time `env` (`OPENCODE_SERVER_PASSWORD`)
+  — never argv, never logged. Only servers `mando` itself auto-starts get a
+  password; a user-started `opencode serve` is untouched.
 - Pairing tokens/machine tokens are revocable — revoking a machine
   (`POST /api/v1/machines/:id/revoke`) must drop any live tunnel immediately,
   not just block future connections.
