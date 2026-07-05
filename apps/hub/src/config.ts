@@ -25,7 +25,35 @@ const Schema = z.object({
   // this only lets an operator override the cadence, same pattern as the
   // rate-limit maxes above.
   MANDO_RETENTION_INTERVAL_MS: z.coerce.number().int().positive().optional(),
+  // Enables the images/provider feature (crypto/secretbox.ts): a per-user
+  // provider API key is encrypted at rest with this AES-256-GCM key. Left
+  // unset, isEncryptionConfigured() reports false and every provider/images
+  // route hard-disables (503) rather than ever writing a plaintext key --
+  // there is no "encryption optional" mode for that data. Accepts hex
+  // (`openssl rand -hex 32`, 64 hex chars) or base64, decoded below and
+  // hard-checked to be exactly 32 bytes -- a wrong-length key would either
+  // silently truncate/pad (weakening it) or throw deep inside node:crypto
+  // at first use instead of at startup where an operator will actually see it.
+  MANDO_ENCRYPTION_KEY: z.string().min(1).optional(),
 });
+
+// Exactly 64 lowercase/uppercase hex characters decodes to 32 bytes -- that
+// exact shape is treated as hex; anything else (notably base64's 44-char,
+// `+/=`-containing form for a 32-byte key) is decoded as base64. A base64
+// string composed entirely of hex-looking characters would be misread as
+// hex here, but it would then fail the 32-byte length check below and hard
+// fail startup rather than silently accepting a wrong key -- so the
+// ambiguity is safe, not just unlikely.
+function decodeEncryptionKey(raw: string): Buffer {
+  const isHex = raw.length === 64 && /^[0-9a-fA-F]+$/.test(raw);
+  const decoded = isHex ? Buffer.from(raw, "hex") : Buffer.from(raw, "base64");
+  if (decoded.length !== 32) {
+    throw new Error(
+      `MANDO_ENCRYPTION_KEY must decode to exactly 32 bytes (got ${decoded.length}); generate one with \`openssl rand -hex 32\``,
+    );
+  }
+  return decoded;
+}
 
 export type Config = {
   port: number;
@@ -38,6 +66,7 @@ export type Config = {
   rateLimitPairingMax?: number;
   rateLimitWsAgentMax?: number;
   retentionIntervalMs?: number;
+  encryptionKey?: Buffer;
 };
 
 export function loadConfig(env: Record<string, string | undefined>): Config {
@@ -53,5 +82,6 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
     rateLimitPairingMax: p.MANDO_RATE_LIMIT_PAIRING_MAX,
     rateLimitWsAgentMax: p.MANDO_RATE_LIMIT_WS_AGENT_MAX,
     retentionIntervalMs: p.MANDO_RETENTION_INTERVAL_MS,
+    encryptionKey: p.MANDO_ENCRYPTION_KEY ? decodeEncryptionKey(p.MANDO_ENCRYPTION_KEY) : undefined,
   };
 }
