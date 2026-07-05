@@ -81,6 +81,11 @@ export type GeneratedImage = {
 export type GenerateImageInput = {
   prompt: string;
   size?: string;
+  // "Count": the hub loops the provider call this many times (clamped
+  // 1..4 server-side, see imageRoutes' clampImageCount) and stores each
+  // result -- so a single generateImage() call can return more than one
+  // image. Omitted (or 1) keeps today's single-image behavior.
+  n?: number;
 };
 
 // Matches chatRoutes' `toConversationJson()` in apps/hub/src/chat/routes.ts.
@@ -174,7 +179,11 @@ export interface HubClient {
   // Throws HubClientError with status 400 (message "provider_not_configured")
   // when the user has no provider row yet.
   listProviderModels(): Promise<ProviderModel[]>;
-  generateImage(input: GenerateImageInput): Promise<GeneratedImage>;
+  // Returns every image the hub generated for this one call -- always an
+  // array, even for the common `n` omitted/1 case, since imageRoutes' POST
+  // /api/v1/images/generations always responds `{images: [...]}` (see
+  // Task 2: Generation richness).
+  generateImage(input: GenerateImageInput): Promise<GeneratedImage[]>;
   editImage(input: EditImageInput): Promise<GeneratedImage>;
   listImages(): Promise<GeneratedImage[]>;
   // Same-origin GET URL for the raw image bytes, for direct use as an
@@ -434,9 +443,13 @@ export function createHubClient(options: HubClientOptions = {}): HubClient {
     async generateImage(input) {
       const res = await request("/api/v1/images/generations", {
         method: "POST",
-        body: JSON.stringify({ prompt: input.prompt, size: input.size }),
+        body: JSON.stringify({ prompt: input.prompt, size: input.size, n: input.n }),
       });
-      return parseOrThrowWithMessage<GeneratedImage>(res, "generateImage failed");
+      const data = await parseOrThrowWithMessage<{ images: GeneratedImage[] }>(
+        res,
+        "generateImage failed",
+      );
+      return data.images;
     },
 
     async editImage(input) {

@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/field";
 import { Link } from "@/components/ui/link";
-import { TrashIcon } from "@/components/icons/lucide";
+import { ArrowPathIcon, TrashIcon } from "@/components/icons/lucide";
 import {
   Select,
   SelectContent,
@@ -38,6 +38,12 @@ const SIZE_OPTIONS = [
   { id: "1024x1792", title: "Portrait (1024x1792)" },
   { id: "1792x1024", title: "Landscape (1792x1024)" },
 ];
+
+// "Count": how many images a single Generate submits for -- the hub loops
+// the provider call this many times and stores each (imageRoutes'
+// clampImageCount clamps 1..4 server-side too; this list is just the UI's
+// offered range, kept in sync with that same 1..4 bound).
+const COUNT_OPTIONS = ["1", "2", "3", "4"];
 
 function isProviderNotConfigured(err: unknown): boolean {
   return err instanceof HubClientError && err.status === 400 && err.message === PROVIDER_NOT_CONFIGURED;
@@ -83,8 +89,12 @@ export function ImagesGallery({ client = defaultHubClient }: ImagesGalleryProps)
 
   const [prompt, setPrompt] = useState("");
   const [size, setSize] = useState<string | null>("auto");
+  const [count, setCount] = useState<string | null>("1");
   const [generating, setGenerating] = useState(false);
   const [generateNotice, setGenerateNotice] = useState<Notice | null>(null);
+
+  const [regeneratingId, setRegeneratingId] = useState<string | null>(null);
+  const [regenerateNotice, setRegenerateNotice] = useState<Notice | null>(null);
 
   const [editFile, setEditFile] = useState<File | null>(null);
   const [editPrompt, setEditPrompt] = useState("");
@@ -110,15 +120,19 @@ export function ImagesGallery({ client = defaultHubClient }: ImagesGalleryProps)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [client]);
 
-  function addImage(image: GeneratedImage) {
+  function addImages(newImages: GeneratedImage[]) {
     setState((current) => ({
       status: "ready",
-      images: [image, ...(current.status === "ready" ? current.images : [])],
+      images: [...newImages, ...(current.status === "ready" ? current.images : [])],
     }));
   }
 
   function resolvedSize(): string | undefined {
     return size && size !== "auto" ? size : undefined;
+  }
+
+  function resolvedCount(): number {
+    return count ? Number(count) : 1;
   }
 
   async function handleGenerate(event: React.FormEvent) {
@@ -129,13 +143,39 @@ export function ImagesGallery({ client = defaultHubClient }: ImagesGalleryProps)
     setGenerating(true);
     setGenerateNotice(null);
     try {
-      const image = await client.generateImage({ prompt: trimmed, size: resolvedSize() });
-      addImage(image);
+      const images = await client.generateImage({
+        prompt: trimmed,
+        size: resolvedSize(),
+        n: resolvedCount(),
+      });
+      addImages(images);
       setPrompt("");
     } catch (err) {
       setGenerateNotice(noticeFromError(err, "Failed to generate image."));
     } finally {
       setGenerating(false);
+    }
+  }
+
+  // Regenerate: re-submits a single gallery item's own prompt as a brand
+  // new (independent) generation -- always exactly one image, regardless
+  // of the main form's current count selector, since "regenerate this one"
+  // is a distinct action from "generate a fresh batch." Uses the form's
+  // current size selection, since a stored image doesn't carry its own
+  // size back from the provider.
+  async function handleRegenerate(image: GeneratedImage) {
+    const trimmed = image.prompt?.trim();
+    if (!trimmed || regeneratingId) return;
+
+    setRegeneratingId(image.id);
+    setRegenerateNotice(null);
+    try {
+      const images = await client.generateImage({ prompt: trimmed, size: resolvedSize() });
+      addImages(images);
+    } catch (err) {
+      setRegenerateNotice(noticeFromError(err, "Failed to regenerate image."));
+    } finally {
+      setRegeneratingId(null);
     }
   }
 
@@ -167,7 +207,7 @@ export function ImagesGallery({ client = defaultHubClient }: ImagesGalleryProps)
     setEditNotice(null);
     try {
       const image = await client.editImage({ prompt: trimmed, size: resolvedSize(), image: editFile });
-      addImage(image);
+      addImages([image]);
       setEditPrompt("");
       setEditFile(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -228,6 +268,24 @@ export function ImagesGallery({ client = defaultHubClient }: ImagesGalleryProps)
                 {SIZE_OPTIONS.map((option) => (
                   <SelectItem key={option.id} id={option.id} textValue={option.title}>
                     {option.title}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="w-28 space-y-1">
+            <span className="select-none text-base/6 text-fg sm:text-sm/6">Count</span>
+            <Select
+              aria-label="Count"
+              value={count}
+              onChange={(value) => setCount(value ? String(value) : null)}
+              placeholder="1"
+            >
+              <SelectTrigger />
+              <SelectContent>
+                {COUNT_OPTIONS.map((option) => (
+                  <SelectItem key={option} id={option} textValue={option}>
+                    {option}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -307,21 +365,35 @@ export function ImagesGallery({ client = defaultHubClient }: ImagesGalleryProps)
                     className="aspect-square w-full object-cover"
                   />
                 </button>
-                <Button
-                  type="button"
-                  size="sq-xs"
-                  intent="danger"
-                  aria-label={`Delete image: ${image.prompt ?? image.id}`}
-                  onPress={() => handleDelete(image.id)}
-                  isDisabled={deletingId === image.id}
-                  className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 focus:opacity-100"
-                >
-                  <TrashIcon className="size-3.5" />
-                </Button>
+                <div className="absolute top-1 right-1 flex gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100">
+                  {image.prompt && (
+                    <Button
+                      type="button"
+                      size="sq-xs"
+                      intent="secondary"
+                      aria-label={`Regenerate image: ${image.prompt}`}
+                      onPress={() => handleRegenerate(image)}
+                      isDisabled={regeneratingId === image.id}
+                    >
+                      <ArrowPathIcon className={`size-3.5 ${regeneratingId === image.id ? "animate-spin" : ""}`} />
+                    </Button>
+                  )}
+                  <Button
+                    type="button"
+                    size="sq-xs"
+                    intent="danger"
+                    aria-label={`Delete image: ${image.prompt ?? image.id}`}
+                    onPress={() => handleDelete(image.id)}
+                    isDisabled={deletingId === image.id}
+                  >
+                    <TrashIcon className="size-3.5" />
+                  </Button>
+                </div>
               </li>
             ))}
           </ul>
         )}
+        {regenerateNotice && <div className="mt-3"><NoticeBanner notice={regenerateNotice} /></div>}
       </div>
 
       {enlarged && (

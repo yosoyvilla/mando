@@ -453,12 +453,14 @@ test("full generate flow via a fake provider writes the file to disk, returns me
       body: JSON.stringify({ prompt: "a red bicycle" }),
     });
     expect(res.status).toBe(201);
-    const body = await res.json();
+    const responseBody = await res.json();
+    expect(responseBody.images).toHaveLength(1);
+    const body = responseBody.images[0];
     expect(body.prompt).toBe("a red bicycle");
     expect(body.sourceKind).toBe("generation");
     expect(body.mime).toBe("image/png");
-    expect(JSON.stringify(body)).not.toContain("sk-test-provider-key");
-    expect(JSON.stringify(body)).not.toContain(config.imageDir); // never leak the on-disk path
+    expect(JSON.stringify(responseBody)).not.toContain("sk-test-provider-key");
+    expect(JSON.stringify(responseBody)).not.toContain(config.imageDir); // never leak the on-disk path
 
     const listRes = await app.request("/api/v1/images", { headers: { Cookie: cookie } });
     const listBody = await listRes.json();
@@ -479,6 +481,71 @@ test("full generate flow via a fake provider writes the file to disk, returns me
   }
 });
 
+test("POST /api/v1/images/generations clamps an out-of-range n to 1..4 and stores that many images", async () => {
+  const fake = startFakeProviderServer(() => Response.json({ data: [{ b64_json: b64Png1x1() }] }));
+  try {
+    const app = buildApp({ sql, config, imagesProviderDeps: { assertSafeUrl: noopGuard } });
+    const { userId, cookie } = await registerAndLogin(app, "n-clamp-high");
+    await configureProvider(userId, fake.baseUrl);
+
+    const res = await app.request("/api/v1/images/generations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: cookie },
+      body: JSON.stringify({ prompt: "a red bicycle", n: 100 }),
+    });
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    // Clamped to the 4-image cap, not rejected and not literally 100.
+    expect(body.images).toHaveLength(4);
+    expect(fake.requests.length).toBe(4);
+    expect(new Set(body.images.map((image: { id: string }) => image.id)).size).toBe(4);
+
+    const listRes = await app.request("/api/v1/images", { headers: { Cookie: cookie } });
+    expect((await listRes.json()).images).toHaveLength(4);
+  } finally {
+    fake.stop();
+  }
+});
+
+test("POST /api/v1/images/generations clamps a below-range n (0) up to 1", async () => {
+  const fake = startFakeProviderServer(() => Response.json({ data: [{ b64_json: b64Png1x1() }] }));
+  try {
+    const app = buildApp({ sql, config, imagesProviderDeps: { assertSafeUrl: noopGuard } });
+    const { userId, cookie } = await registerAndLogin(app, "n-clamp-low");
+    await configureProvider(userId, fake.baseUrl);
+
+    const res = await app.request("/api/v1/images/generations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: cookie },
+      body: JSON.stringify({ prompt: "a red bicycle", n: 0 }),
+    });
+    expect(res.status).toBe(201);
+    expect((await res.json()).images).toHaveLength(1);
+    expect(fake.requests.length).toBe(1);
+  } finally {
+    fake.stop();
+  }
+});
+
+test("POST /api/v1/images/generations defaults to a single image when n is omitted", async () => {
+  const fake = startFakeProviderServer(() => Response.json({ data: [{ b64_json: b64Png1x1() }] }));
+  try {
+    const app = buildApp({ sql, config, imagesProviderDeps: { assertSafeUrl: noopGuard } });
+    const { userId, cookie } = await registerAndLogin(app, "n-default");
+    await configureProvider(userId, fake.baseUrl);
+
+    const res = await app.request("/api/v1/images/generations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: cookie },
+      body: JSON.stringify({ prompt: "a red bicycle" }),
+    });
+    expect((await res.json()).images).toHaveLength(1);
+    expect(fake.requests.length).toBe(1);
+  } finally {
+    fake.stop();
+  }
+});
+
 test("full generate flow labels a provider-returned JPEG as image/jpeg, not the hardcoded image/png", async () => {
   const fake = startFakeProviderServer(() =>
     Response.json({ data: [{ b64_json: jpegBytesMislabeledAsPng().toString("base64") }] }),
@@ -494,7 +561,7 @@ test("full generate flow labels a provider-returned JPEG as image/jpeg, not the 
       body: JSON.stringify({ prompt: "x" }),
     });
     expect(res.status).toBe(201);
-    const body = await res.json();
+    const body = (await res.json()).images[0];
     expect(body.mime).toBe("image/jpeg");
 
     const rawRes = await app.request(`/api/v1/images/${body.id}/raw`, { headers: { Cookie: cookie } });

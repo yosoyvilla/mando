@@ -19,7 +19,23 @@ const MAX_PROMPT_LENGTH = 4000;
 const generateSchema = z.object({
   prompt: z.string().min(1).max(MAX_PROMPT_LENGTH),
   size: z.string().min(1).max(32).optional(),
+  // Deliberately NOT `.min(1).max(4)` -- an out-of-range value is CLAMPED
+  // (clampImageCount below), not rejected, per the plan's Generation
+  // richness task. Only the type (a number, if present at all) is
+  // validated here.
+  n: z.coerce.number().optional(),
 });
+
+const MAX_IMAGE_COUNT = 4;
+
+// Coerces an arbitrary/absent `n` into a safe loop count: missing or NaN
+// defaults to 1 (today's single-image behavior), and anything outside
+// 1..MAX_IMAGE_COUNT is clamped to the nearest bound rather than rejected --
+// a caller asking for 0 or 100 images gets 1 or 4, not a 400.
+export function clampImageCount(n: number | undefined): number {
+  if (n === undefined || Number.isNaN(n)) return 1;
+  return Math.min(MAX_IMAGE_COUNT, Math.max(1, Math.trunc(n)));
+}
 
 // The json-body variant of POST /images/edits: edit an image already
 // stored for this user (identified by id) rather than one uploaded fresh
@@ -116,24 +132,33 @@ export function imageRoutes(
     if (!settings) return c.json({ error: "provider_not_configured" }, 400);
 
     const apiKey = decryptSecret(settings.api_key_encrypted, config);
+    // "Count" is satisfied by calling the provider N times and storing each
+    // result separately -- rather than trusting the provider's own `n`
+    // param (unreliable across OpenAI-compatible providers) -- per the
+    // plan's Generation richness task.
+    const count = clampImageCount(parsed.data.n);
     try {
-      const result = await generateImage(
-        {
-          baseUrl: settings.base_url,
-          apiKey,
-          model: settings.image_model,
+      const images: ImageMetadata[] = [];
+      for (let i = 0; i < count; i += 1) {
+        const result = await generateImage(
+          {
+            baseUrl: settings.base_url,
+            apiKey,
+            model: settings.image_model,
+            prompt: parsed.data.prompt,
+            size: parsed.data.size,
+          },
+          clientDeps,
+        );
+        const image = await createImage(sql, config.imageDir, userId, {
           prompt: parsed.data.prompt,
-          size: parsed.data.size,
-        },
-        clientDeps,
-      );
-      const image = await createImage(sql, config.imageDir, userId, {
-        prompt: parsed.data.prompt,
-        mime: result.mime,
-        bytes: result.bytes,
-        sourceKind: "generation",
-      });
-      return c.json(toMetadata(image), 201);
+          mime: result.mime,
+          bytes: result.bytes,
+          sourceKind: "generation",
+        });
+        images.push(image);
+      }
+      return c.json({ images: images.map(toMetadata) }, 201);
     } catch (err) {
       if (err instanceof ProviderImageError) {
         const { status, body } = providerErrorResponse(err);

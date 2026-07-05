@@ -368,18 +368,18 @@ describe("createHubClient", () => {
   });
 
   describe("generateImage", () => {
-    it("POSTs prompt and size to /api/v1/images/generations and returns the created image's metadata", async () => {
+    it("POSTs prompt/size/n to /api/v1/images/generations and returns every created image's metadata", async () => {
       const image = { id: "img1", prompt: "a cat", mime: "image/png", sourceKind: "generation", createdAt: "2026-07-05T00:00:00.000Z" };
-      const fetchMock = mock<FetchFn>(() => Promise.resolve(jsonResponse(image, 201)));
+      const fetchMock = mock<FetchFn>(() => Promise.resolve(jsonResponse({ images: [image] }, 201)));
       globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-      const result = await createHubClient().generateImage({ prompt: "a cat", size: "1024x1024" });
+      const result = await createHubClient().generateImage({ prompt: "a cat", size: "1024x1024", n: 2 });
 
       const [url, init = {}] = fetchMock.mock.calls[0];
       expect(url).toBe("/api/v1/images/generations");
       expect(init.method).toBe("POST");
-      expect(JSON.parse(init.body as string)).toEqual({ prompt: "a cat", size: "1024x1024" });
-      expect(result).toEqual(image);
+      expect(JSON.parse(init.body as string)).toEqual({ prompt: "a cat", size: "1024x1024", n: 2 });
+      expect(result).toEqual([image]);
     });
 
     it("maps a 400 provider_not_configured response to a matching HubClientError", async () => {

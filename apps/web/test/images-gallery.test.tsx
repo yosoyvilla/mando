@@ -60,8 +60,26 @@ describe("ImagesGallery", () => {
     });
   });
 
-  it("generate calls client.generateImage with the prompt and prepends the result to the gallery", async () => {
+  it("generate calls client.generateImage with the prompt/count and prepends the results to the gallery", async () => {
     const created = image({ id: "img2", prompt: "a dog" });
+    const client = stubClient({ generateImage: mock(() => Promise.resolve([created])) });
+    render(<ImagesGallery client={client} />);
+
+    await waitFor(() => expect(client.listImages).toHaveBeenCalledTimes(1));
+    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "a dog" } });
+    fireEvent.click(screen.getByRole("button", { name: "Generate" }));
+
+    await waitFor(() => {
+      expect(client.generateImage).toHaveBeenCalledWith({ prompt: "a dog", size: undefined, n: 1 });
+    });
+    expect(await screen.findByAltText("a dog")).toBeInTheDocument();
+  });
+
+  it("prepends every image from a multi-image generateImage response", async () => {
+    const created = [
+      image({ id: "img-a", prompt: "a dog" }),
+      image({ id: "img-b", prompt: "a dog" }),
+    ];
     const client = stubClient({ generateImage: mock(() => Promise.resolve(created)) });
     render(<ImagesGallery client={client} />);
 
@@ -70,9 +88,28 @@ describe("ImagesGallery", () => {
     fireEvent.click(screen.getByRole("button", { name: "Generate" }));
 
     await waitFor(() => {
-      expect(client.generateImage).toHaveBeenCalledWith({ prompt: "a dog", size: undefined });
+      expect(screen.getAllByAltText("a dog")).toHaveLength(2);
     });
-    expect(await screen.findByAltText("a dog")).toBeInTheDocument();
+  });
+
+  it("regenerate re-posts a gallery item's own prompt as a new generation", async () => {
+    const original = image({ id: "img1", prompt: "a cat" });
+    const regenerated = image({ id: "img-regen", prompt: "a cat" });
+    const client = stubClient({
+      listImages: mock(() => Promise.resolve([original])),
+      generateImage: mock(() => Promise.resolve([regenerated])),
+    });
+    render(<ImagesGallery client={client} />);
+
+    const regenButton = await screen.findByRole("button", { name: "Regenerate image: a cat" });
+    fireEvent.click(regenButton);
+
+    await waitFor(() => {
+      expect(client.generateImage).toHaveBeenCalledWith({ prompt: "a cat", size: undefined });
+    });
+    await waitFor(() => {
+      expect(screen.getAllByAltText("a cat")).toHaveLength(2);
+    });
   });
 
   it("shows a friendly 'set up a provider in Settings first' message on a 400 provider_not_configured response, linking to Settings", async () => {
