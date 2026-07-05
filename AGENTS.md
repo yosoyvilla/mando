@@ -69,6 +69,18 @@ exposed to the network.
   live: remote content lands in the terminal transcript as a reply. Keep the
   template tool-free (`Without using any tools`) and keep the exact no-op
   sentence tests assert on.
+- **Composer attachments are opencode `file` parts.** Images/PDFs from the web
+  composer become `{type:"file", mime, filename, url:"data:<mime>;base64,..."}`
+  parts on `POST /session/:id/message` (verified live 1.17.13: accepted +
+  persisted verbatim). Caps live in `apps/web/src/lib/attachments.ts`: 4 files,
+  8MB TOTAL per message — LOAD-BEARING, because file bytes cross the tunnel
+  DOUBLE-base64-encoded (browser data-URL, then proxy/routes.ts re-encodes the
+  whole body for the http_request frame, ~1.78x) against Bun's 16MB WS default;
+  8MB raw -> ~14.2MB frame. Raising the cap requires raising Bun.serve's
+  websocket maxPayloadLength/backpressureLimit on the hub. Rendered file urls
+  are scheme-checked (attached-files.tsx): only http/https/blob get an <a href>;
+  data: files are `download` links; data:text/html and javascript: are refused
+  (XSS). A file part's url is untrusted (any client can write it).
 - **`mando tui` is the mirrored-terminal path.**
   Opencode's attach mode and its `/tui/*` control endpoints
   (`append-prompt`, `submit-prompt`, `show-toast`, `select-session`, and the

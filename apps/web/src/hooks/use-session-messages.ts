@@ -9,6 +9,7 @@ import type {
   TextPart,
   ReasoningPart,
   PermissionRequest,
+  PromptFileAttachment,
   QuestionAnswer,
   QuestionInfo,
   QuestionOption,
@@ -28,10 +29,12 @@ import { opencodeJson } from "@/lib/opencode-fetch";
 export type {
   Message,
   Part,
+  FilePart,
   ToolPart,
   ToolState,
   TextPart,
   PermissionRequest,
+  PromptFileAttachment,
   QuestionAnswer,
   QuestionInfo,
   QuestionOption,
@@ -129,7 +132,7 @@ export function sortSessionMessages(messages: SessionMessage[]) {
     .map((item) => item.message);
 }
 
-function normalizeFetchedMessages(data: unknown) {
+export function normalizeFetchedMessages(data: unknown) {
   // The unprefixed `GET /session/:id/message` (confirmed against a live
   // opencode 1.17.13) returns a BARE ARRAY of `{info, parts}` objects --
   // this is now the primary shape, handled below by `isMessageWithParts` +
@@ -193,6 +196,38 @@ function legacyTextFromParts(parts: Part[]) {
     )
     .map((part) => part.text)
     .join("\n\n");
+}
+
+function isFilePart(part: Part): part is FilePart {
+  return part.type === "file";
+}
+
+// The user SessionMessage variant's `files` field (PromptFileAttachment[])
+// and the legacy Part union's FilePart both carry {mime, filename/name,
+// url/uri} -- these two helpers keep attachments crossing that boundary
+// intact instead of being silently dropped like `text` alone used to be.
+function legacyFilesFromParts(parts: Part[]): PromptFileAttachment[] {
+  return parts.filter(isFilePart).map((part) => ({
+    uri: part.url,
+    mime: part.mime,
+    ...(part.filename ? { name: part.filename } : {}),
+  }));
+}
+
+function filePartsFromAttachments(
+  files: PromptFileAttachment[] | undefined,
+  sessionId: string,
+  messageId: string,
+): FilePart[] {
+  return (files ?? []).map((attachment, index) => ({
+    id: `${messageId}-file-${index}`,
+    sessionID: sessionId,
+    messageID: messageId,
+    type: "file",
+    mime: attachment.mime,
+    filename: attachment.name,
+    url: attachment.uri,
+  }));
 }
 
 function toolContentFromOutput(output?: string): ToolTextContent[] {
@@ -331,11 +366,13 @@ function legacyMessageToSessionMessage(
   message: MessageWithParts,
 ): SessionMessage {
   if (message.info.role === "user") {
+    const files = legacyFilesFromParts(message.parts);
     return {
       id: message.info.id,
       type: "user",
       text: legacyTextFromParts(message.parts),
       time: message.info.time,
+      ...(files.length > 0 ? { files } : {}),
       ...(message.isQueued ? { metadata: { mandoQueued: true } } : {}),
     };
   }
@@ -706,6 +743,11 @@ export function sessionMessagesToLegacy(
                   message.id,
                   message.text,
                 ),
+                ...filePartsFromAttachments(
+                  message.files,
+                  sessionId,
+                  message.id,
+                ),
               ],
               isQueued: message.metadata?.mandoQueued === true,
             },
@@ -763,6 +805,7 @@ export function addOptimisticMessage(
 ): () => void {
   const key = getMessagesKey(machineId, sessionId);
   let previousMessages: SessionMessage[] = [];
+  const files = legacyFilesFromParts(message.parts);
   const optimisticMessage: SessionMessage = {
     id: message.info.id,
     type: "user",
@@ -770,6 +813,7 @@ export function addOptimisticMessage(
     time: {
       created: message.info.time.created,
     },
+    ...(files.length > 0 ? { files } : {}),
     metadata: {
       mandoOptimistic: true,
       mandoPending: true,
@@ -861,11 +905,16 @@ export function updateOptimisticMessage(
       return current.map((message) => {
         if (message.id !== messageId || message.type !== "user") return message;
 
+        const files = updates.parts
+          ? legacyFilesFromParts(updates.parts)
+          : undefined;
+
         return {
           ...message,
           ...(updates.parts
             ? { text: legacyTextFromParts(updates.parts) }
             : {}),
+          ...(files ? { files: files.length > 0 ? files : undefined } : {}),
           metadata: {
             ...(message.metadata ?? {}),
             ...("isQueued" in updates

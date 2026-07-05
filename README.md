@@ -13,6 +13,7 @@ It is meant to be self-hosted. You run the server on a machine you control (your
 - [Connecting a machine](#connecting-a-machine) — including a hub running on another server
 - [Installing the agent](#installing-the-agent) — building the binary, config, commands and flags, [updating the agent](#updating-the-agent), and [starting on boot](#starting-on-boot)
 - [The /mando command](#the-mando-command)
+- [Attaching files](#attaching-files) — images and PDFs from the composer
 - [Live mirroring with mando tui](#live-mirroring-with-mando-tui) — and [how a session moves between terminal and browser](#how-a-session-moves-between-terminal-and-browser)
 - [Configuration](#configuration) — environment variables
 - [Deploying](#deploying) — running the hub on a server, including [logs, backups, and uptime monitoring](#logs-backups-and-uptime-monitoring)
@@ -237,6 +238,18 @@ Windows is not supported yet — `mando autostart` refuses gracefully there rath
 Because `/mando` runs `connect` without `--hub`, the machine must already know its hub — either from a previous `mando connect --hub ...` (saved in `~/.mando.json`) or from the `MANDO_HUB` environment variable. On the first ever run with neither set, `/mando` will report that no hub is configured; do the one-time `mando connect --hub ...` (or set `MANDO_HUB`) and it works from then on.
 
 The command takes no arguments. Anything typed after `/mando` is ignored rather than passed to a shell, so it cannot be used to inject commands.
+
+## Attaching files
+
+The composer accepts images and PDFs — useful for driving a session from your phone: send a screenshot of an error, a photo of a whiteboard, or a PDF spec. Attach them three ways:
+
+- the paperclip button (on a phone this opens the camera or photo library),
+- paste from the clipboard (`Cmd`/`Ctrl` + `V`) — the fastest way to send a screenshot on a laptop,
+- or drag and drop onto the chat.
+
+Limits are up to 4 files and 8 MB total per message. Attachments travel through your hub to the machine and become part of the message in the session, exactly like a file attached from any other opencode client; they are never stored on the hub.
+
+One honest caveat: whether the assistant can actually *read* an attachment depends on the model the session uses. A vision-capable model will see images; PDF support varies by provider. Mando always delivers the file to the session — the model decides what it can do with it.
 
 ## Live mirroring with mando tui
 

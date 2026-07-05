@@ -509,7 +509,15 @@ export async function startStubOpencode(): Promise<StubOpencode> {
           model?: { providerID?: string; modelID?: string };
           agent?: string;
           variant?: string;
-          parts?: Array<{ type?: string; text?: string }>;
+          parts?: Array<{
+            id?: string;
+            type?: string;
+            text?: string;
+            mime?: string;
+            filename?: string;
+            url?: string;
+            source?: unknown;
+          }>;
         };
 
         if (body.model?.providerID && body.model.modelID) {
@@ -522,10 +530,34 @@ export async function startStubOpencode(): Promise<StubOpencode> {
         if (body.agent) session.agent = body.agent;
         if (body.model || body.agent) touchSession(sessionId);
 
+        const incomingParts = body.parts ?? [];
         const promptText =
-          body.parts?.find((part) => part.type === "text")?.text ?? "";
+          incomingParts.find((part) => part.type === "text")?.text ?? "";
         const messageId = body.messageID ?? stubId("msg");
         const now = Date.now();
+
+        // Persist every part verbatim, not just the text one -- a file part
+        // ({type:"file", mime, filename, url, source?}, confirmed against a
+        // live opencode 1.17.13's round-trip) must survive back out of `GET
+        // /session/:id/message` exactly as the composer sent it, in the
+        // same order, so the e2e suite can assert on the wire shape it
+        // actually produces (files ahead of text -- see
+        // apps/web/src/lib/attachments.ts's `buildFileParts` call site).
+        const parts: StubPart[] = incomingParts.map((part) => ({
+          id: part.id ?? stubId("prt"),
+          sessionID: sessionId,
+          messageID: messageId,
+          type: part.type,
+          ...(part.type === "text" ? { text: part.text } : {}),
+          ...(part.type === "file"
+            ? {
+                mime: part.mime,
+                filename: part.filename,
+                url: part.url,
+                ...(part.source !== undefined ? { source: part.source } : {}),
+              }
+            : {}),
+        }));
 
         pushMessage(sessionId, {
           info: {
@@ -536,15 +568,7 @@ export async function startStubOpencode(): Promise<StubOpencode> {
             agent: session.agent ?? "build",
             model: { providerID: "stub", modelID: "stub-model" },
           },
-          parts: [
-            {
-              id: stubId("prt"),
-              sessionID: sessionId,
-              messageID: messageId,
-              type: "text",
-              text: promptText,
-            },
-          ],
+          parts,
         });
 
         broadcast({
