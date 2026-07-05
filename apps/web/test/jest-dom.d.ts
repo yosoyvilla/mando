@@ -10,6 +10,7 @@ declare module "bun:test" {
     toHaveTextContent(text: string | RegExp): void;
     toHaveValue(value: string | string[] | number): void;
     toBeDisabled(): void;
+    toHaveAttribute(name: string, value?: string | RegExp): void;
   }
 }
 
