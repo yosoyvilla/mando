@@ -28,11 +28,12 @@ function AppLayout() {
 
 // Pages under `/_app` that are user-scoped rather than machine-scoped (see
 // docs/superpowers/plans/2026-07-05-image-generation.md, Task 4's "must
-// work with NO machine selected" constraint) -- listed by pathname so the
-// gate below can skip past the "redirect to /machines" / "wait for a
-// machine to auto-select" logic for exactly these two routes while every
-// other `/_app` page keeps requiring a machine as before.
-const MACHINE_INDEPENDENT_PATHS = new Set(["/settings", "/images"]);
+// work with NO machine selected" constraint, extended to Chat by
+// docs/superpowers/plans/2026-07-05-chat-and-images-v2.md, Task 5b) --
+// listed by pathname so the gate below can skip past the "redirect to
+// /machines" / "wait for a machine to auto-select" logic for exactly these
+// routes while every other `/_app` page keeps requiring a machine as before.
+const MACHINE_INDEPENDENT_PATHS = new Set(["/settings", "/images", "/chat"]);
 
 function ConnectedAppLayout() {
   const location = useLocation();

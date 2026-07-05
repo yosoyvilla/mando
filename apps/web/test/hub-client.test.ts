@@ -481,4 +481,227 @@ describe("createHubClient", () => {
       expect(init.credentials).toBe("include");
     });
   });
+
+  // Standalone Chat (see docs/superpowers/plans/2026-07-05-chat-and-images-v2.md,
+  // Task 5b). Matches apps/hub/src/chat/routes.ts exactly.
+  describe("listConversations", () => {
+    it("GETs /api/v1/chat/conversations and returns the unwrapped list", async () => {
+      const conversations = [
+        { id: "c1", title: "first", model: "gpt-4o-mini", createdAt: "2026-07-05T00:00:00.000Z", updatedAt: "2026-07-05T00:00:00.000Z" },
+      ];
+      const fetchMock = mock<FetchFn>(() => Promise.resolve(jsonResponse({ conversations })));
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      const result = await createHubClient().listConversations();
+
+      const [url, init = {}] = fetchMock.mock.calls[0];
+      expect(url).toBe("/api/v1/chat/conversations");
+      expect(init.method).toBeUndefined(); // default GET
+      expect(init.credentials).toBe("include");
+      expect(result).toEqual(conversations);
+    });
+  });
+
+  describe("createConversation", () => {
+    it("POSTs an empty body when no input is given", async () => {
+      const conversation = { id: "c1", title: null, model: null, createdAt: "2026-07-05T00:00:00.000Z", updatedAt: "2026-07-05T00:00:00.000Z" };
+      const fetchMock = mock<FetchFn>(() => Promise.resolve(jsonResponse(conversation, 201)));
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      const result = await createHubClient().createConversation();
+
+      const [url, init = {}] = fetchMock.mock.calls[0];
+      expect(url).toBe("/api/v1/chat/conversations");
+      expect(init.method).toBe("POST");
+      expect(JSON.parse(init.body as string)).toEqual({});
+      expect(result).toEqual(conversation);
+    });
+
+    it("includes only the fields the caller supplies", async () => {
+      const fetchMock = mock<FetchFn>(() =>
+        Promise.resolve(jsonResponse({ id: "c1", title: null, model: "gpt-4o-mini", createdAt: "", updatedAt: "" }, 201)),
+      );
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      await createHubClient().createConversation({ model: "gpt-4o-mini" });
+
+      const [, init = {}] = fetchMock.mock.calls[0];
+      expect(JSON.parse(init.body as string)).toEqual({ model: "gpt-4o-mini" });
+    });
+  });
+
+  describe("getConversation", () => {
+    it("GETs /api/v1/chat/conversations/:id and returns the flat conversation + messages", async () => {
+      const body = {
+        id: "c1",
+        title: null,
+        model: null,
+        createdAt: "2026-07-05T00:00:00.000Z",
+        updatedAt: "2026-07-05T00:00:00.000Z",
+        messages: [{ id: "m1", role: "user", content: "hi", attachments: null, createdAt: "2026-07-05T00:00:00.000Z" }],
+      };
+      const fetchMock = mock<FetchFn>(() => Promise.resolve(jsonResponse(body)));
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      const result = await createHubClient().getConversation("c1");
+
+      const [url] = fetchMock.mock.calls[0];
+      expect(url).toBe("/api/v1/chat/conversations/c1");
+      expect(result).toEqual(body);
+    });
+  });
+
+  describe("deleteConversation", () => {
+    it("DELETEs /api/v1/chat/conversations/:id", async () => {
+      const fetchMock = mock<FetchFn>(() => Promise.resolve(jsonResponse({ ok: true, deleted: true })));
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      await createHubClient().deleteConversation("c1");
+
+      const [url, init = {}] = fetchMock.mock.calls[0];
+      expect(url).toBe("/api/v1/chat/conversations/c1");
+      expect(init.method).toBe("DELETE");
+      expect(init.credentials).toBe("include");
+    });
+  });
+
+  describe("streamMessage", () => {
+    // Builds a fetch Response whose body is a ReadableStream emitting the
+    // given raw SSE text in one or more chunks -- mirrors the exact bytes
+    // hono's streamSSE (apps/hub/src/chat/routes.ts) writes to the wire, so
+    // this exercises the client's own SSE parser rather than any test-only
+    // shortcut.
+    function sseResponse(chunks: string[], status = 200): Response {
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const chunk of chunks) controller.enqueue(new TextEncoder().encode(chunk));
+          controller.close();
+        },
+      });
+      return new Response(stream, { status, headers: { "content-type": "text/event-stream" } });
+    }
+
+    it("POSTs content + attachments and dispatches delta/done events from the SSE stream", async () => {
+      const fetchMock = mock<FetchFn>(() =>
+        Promise.resolve(
+          sseResponse([
+            'event: user_message\ndata: {"id":"u1","role":"user","content":"hi","attachments":null,"createdAt":""}\n\n',
+            "event: delta\ndata: Hel\n\n",
+            "event: delta\ndata: lo!\n\n",
+            'event: done\ndata: {"id":"a1","role":"assistant","content":"Hello!","attachments":null,"createdAt":""}\n\n',
+          ]),
+        ),
+      );
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      const deltas: string[] = [];
+      const errors: string[] = [];
+      let done: unknown = null;
+
+      await createHubClient().streamMessage(
+        "c1",
+        { content: "hi", attachments: [{ mime: "image/png", dataUrl: "data:image/png;base64,AA==", name: "a.png" }] },
+        (content) => deltas.push(content),
+        (reason) => errors.push(reason),
+        (message) => {
+          done = message;
+        },
+      );
+
+      const [url, init = {}] = fetchMock.mock.calls[0];
+      expect(url).toBe("/api/v1/chat/conversations/c1/messages");
+      expect(init.method).toBe("POST");
+      expect(JSON.parse(init.body as string)).toEqual({
+        content: "hi",
+        attachments: [{ mime: "image/png", dataUrl: "data:image/png;base64,AA==", name: "a.png" }],
+      });
+      expect(deltas).toEqual(["Hel", "lo!"]);
+      expect(errors).toEqual([]);
+      expect(done).toEqual({ id: "a1", role: "assistant", content: "Hello!", attachments: null, createdAt: "" });
+    });
+
+    it("preserves a leading space in a delta's content (token boundary), not trimming it away", async () => {
+      const fetchMock = mock<FetchFn>(() =>
+        Promise.resolve(sseResponse(["event: delta\ndata: Hello\n\n", "event: delta\ndata:  world\n\n"])),
+      );
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      const deltas: string[] = [];
+      await createHubClient().streamMessage(
+        "c1",
+        { content: "hi" },
+        (content) => deltas.push(content),
+        () => {},
+        () => {},
+      );
+
+      expect(deltas).toEqual(["Hello", " world"]);
+    });
+
+    it("dispatches a mid-stream error event to onError without rejecting the returned promise", async () => {
+      const fetchMock = mock<FetchFn>(() =>
+        Promise.resolve(sseResponse(["event: error\ndata: unsafe_url\n\n"])),
+      );
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      const errors: string[] = [];
+      await createHubClient().streamMessage(
+        "c1",
+        { content: "hi" },
+        () => {},
+        (reason) => errors.push(reason),
+        () => {},
+      );
+
+      expect(errors).toEqual(["unsafe_url"]);
+    });
+
+    it("handles an event split across multiple stream chunks", async () => {
+      const fetchMock = mock<FetchFn>(() =>
+        Promise.resolve(sseResponse(["event: delta\ndata: Hel", "lo!\n\n"])),
+      );
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      const deltas: string[] = [];
+      await createHubClient().streamMessage(
+        "c1",
+        { content: "hi" },
+        (content) => deltas.push(content),
+        () => {},
+        () => {},
+      );
+
+      expect(deltas).toEqual(["Hello!"]);
+    });
+
+    it("rejects with HubClientError, without calling any handler, on a non-2xx response (e.g. 400 provider_not_configured)", async () => {
+      globalThis.fetch = mock(() =>
+        Promise.resolve(jsonResponse({ error: "provider_not_configured" }, 400)),
+      ) as unknown as typeof fetch;
+
+      const client = createHubClient();
+      let onDeltaCalled = false;
+      try {
+        await client.streamMessage(
+          "c1",
+          { content: "hi" },
+          () => {
+            onDeltaCalled = true;
+          },
+          () => {
+            onDeltaCalled = true;
+          },
+          () => {
+            onDeltaCalled = true;
+          },
+        );
+        throw new Error("expected streamMessage to reject");
+      } catch (err) {
+        expect(err).toBeInstanceOf(HubClientError);
+        expect((err as HubClientError).status).toBe(400);
+        expect((err as HubClientError).message).toBe("provider_not_configured");
+      }
+      expect(onDeltaCalled).toBe(false);
+    });
+  });
 });

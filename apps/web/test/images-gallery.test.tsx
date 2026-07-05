@@ -24,6 +24,11 @@ function stubClient(overrides: Partial<HubClient> = {}): HubClient {
     listImages: mock(() => Promise.resolve([])),
     imageRawUrl: mock((id: string) => `/api/v1/images/${id}/raw`),
     deleteImage: mock(() => Promise.resolve()),
+    listConversations: mock(() => Promise.reject(new Error("not implemented"))),
+    createConversation: mock(() => Promise.reject(new Error("not implemented"))),
+    getConversation: mock(() => Promise.reject(new Error("not implemented"))),
+    deleteConversation: mock(() => Promise.reject(new Error("not implemented"))),
+    streamMessage: mock(() => Promise.reject(new Error("not implemented"))),
     ...overrides,
   };
 }
