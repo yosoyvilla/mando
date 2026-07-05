@@ -1,7 +1,7 @@
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { readConfig, writeConfig, type AgentConfig } from "./config";
-import { detectOpencodePort as defaultDetectOpencodePort } from "./opencode";
+import { detectOpencodePort as defaultDetectOpencodePort, ensureOpencodeServer as defaultEnsureOpencodeServer } from "./opencode";
 import {
   clearLastError,
   defaultErrorFilePath,
@@ -21,12 +21,11 @@ const DEFAULT_POST_SPAWN_GRACE_MS = 250;
 
 export interface ConnectOpts {
   json?: boolean;
-  // Accepted per the task brief's required opts shape and parsed by
-  // index.ts's `--opencode-auto` flag, but not yet load-bearing here: the
-  // brief's own step-3 algorithm is unconditional --
-  // `opts.opencodePort ?? detectOpencodePort()` -- with no branch on this
-  // flag. Reserved for a future task (e.g. gating whether to prompt before
-  // auto-detecting) rather than given invented behavior now.
+  // When detection (opts.opencodePort ?? detectOpencodePort()) finds
+  // nothing, this gates whether connect() starts a local `opencode serve`
+  // itself (via ensureOpencodeServer) instead of failing outright -- see
+  // the opencodePort resolution block below. An explicit --opencode-port
+  // always bypasses both detection and this flag.
   opencodeAuto?: boolean;
   opencodePort?: number;
   args?: string[];
@@ -42,6 +41,7 @@ export interface ConnectOpts {
   pairingPollIntervalMs?: number;
   fetchFn?: typeof fetch;
   detectOpencodePort?: () => Promise<number | null>;
+  ensureOpencodeServer?: (directory: string) => Promise<number>;
   spawnDaemon?: (opencodePort: number, connectDirectory: string) => number;
   // Swaps out the real POSIX liveness check (daemon.ts's `isProcessAlive`,
   // itself `process.kill(pid, 0)` in a try/catch) used by the
@@ -227,6 +227,7 @@ function defaultSpawnDaemon(opencodePort: number, connectDirectory: string): num
 export async function connect(opts: ConnectOpts = {}): Promise<ConnectResult> {
   const fetchFn = opts.fetchFn ?? fetch;
   const detectOpencodePort = opts.detectOpencodePort ?? defaultDetectOpencodePort;
+  const ensureOpencodeServer = opts.ensureOpencodeServer ?? defaultEnsureOpencodeServer;
   const spawnDaemon = opts.spawnDaemon ?? defaultSpawnDaemon;
   const isProcessAlive = opts.isProcessAlive ?? defaultIsProcessAlive;
   const pollIntervalMs = opts.pairingPollIntervalMs ?? DEFAULT_PAIRING_POLL_INTERVAL_MS;
@@ -288,11 +289,27 @@ export async function connect(opts: ConnectOpts = {}): Promise<ConnectResult> {
     return { status: "connected", machine: machineName, uiUrl: hubUrl, alreadyRunning: true };
   }
 
-  const opencodePort = opts.opencodePort ?? (await detectOpencodePort());
+  let opencodePort = opts.opencodePort ?? (await detectOpencodePort());
   if (!opencodePort) {
-    const message = "could not detect a local opencode server -- pass --opencode-port <port>";
-    printResult(opts.json, { status: "error", message }, `Error: ${message}`);
-    return { status: "error", message };
+    // Without --opencode-auto, no local server is a hard stop -- connect()
+    // has always required the user to already have one running (or to pass
+    // --opencode-port explicitly). --opencode-auto opts into a different
+    // contract: start one ourselves (see ensureOpencodeServer in
+    // opencode.ts) rather than making every `mando connect` user keep a
+    // second `opencode serve` terminal open.
+    if (!opts.opencodeAuto) {
+      const message = "could not detect a local opencode server -- pass --opencode-port <port>";
+      printResult(opts.json, { status: "error", message }, `Error: ${message}`);
+      return { status: "error", message };
+    }
+
+    try {
+      opencodePort = await ensureOpencodeServer(process.cwd());
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      printResult(opts.json, { status: "error", message }, `Error: ${message}`);
+      return { status: "error", message };
+    }
   }
 
   // Cleared here (synchronously, before the child even exists) rather than
