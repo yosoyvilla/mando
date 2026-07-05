@@ -220,14 +220,36 @@ export async function startRealOpencode(): Promise<RealOpencode> {
     async createTerminalSession(message: string) {
       // See the RealOpencode doc comment for why this is HTTP + noReply
       // rather than `opencode run`.
+      //
+      // Every request here is bounded and folds opencode's own output tail
+      // into its failure. This runs inside Playwright's globalSetup, which
+      // has NO default timeout -- an unbounded fetch against a wedged serve
+      // hangs the whole CI job until the runner's 6h cap (observed: a run
+      // sat in this function for 18+ minutes before being cancelled by
+      // hand). Bounded requests turn that into a fast, diagnosable failure.
+      const opencodeTail = () =>
+        ocOutput.trim()
+          ? `\n--- opencode output (tail) ---\n${ocOutput.trim()}`
+          : " (opencode produced no output)";
+      const boundedFetch = async (label: string, url: string, init?: RequestInit) => {
+        try {
+          return await fetch(url, { ...init, signal: AbortSignal.timeout(15_000) });
+        } catch (error) {
+          const base = error instanceof Error ? error.message : String(error);
+          throw new Error(`${label} did not answer within 15s: ${base}${opencodeTail()}`);
+        }
+      };
+
       const directoryParam = encodeURIComponent(cwd);
-      const createRes = await fetch(`http://127.0.0.1:${port}/session?directory=${directoryParam}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: "{}",
-      });
+      const createRes = await boundedFetch(
+        "real opencode POST /session?directory=",
+        `http://127.0.0.1:${port}/session?directory=${directoryParam}`,
+        { method: "POST", headers: { "content-type": "application/json" }, body: "{}" },
+      );
       if (!createRes.ok) {
-        throw new Error(`real opencode POST /session?directory= failed with status ${createRes.status}`);
+        throw new Error(
+          `real opencode POST /session?directory= failed with status ${createRes.status}${opencodeTail()}`,
+        );
       }
       const created = (await createRes.json()) as { id?: string; directory?: string };
       if (!created.id) throw new Error("real opencode POST /session returned no session id");
@@ -238,21 +260,28 @@ export async function startRealOpencode(): Promise<RealOpencode> {
         );
       }
 
-      const messageRes = await fetch(`http://127.0.0.1:${port}/session/${created.id}/message`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ noReply: true, parts: [{ type: "text", text: message }] }),
-      });
+      const messageRes = await boundedFetch(
+        "real opencode POST /session/:id/message (noReply)",
+        `http://127.0.0.1:${port}/session/${created.id}/message`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ noReply: true, parts: [{ type: "text", text: message }] }),
+        },
+      );
       if (!messageRes.ok) {
         throw new Error(
-          `real opencode POST /session/:id/message (noReply) failed with status ${messageRes.status}`,
+          `real opencode POST /session/:id/message (noReply) failed with status ${messageRes.status}${opencodeTail()}`,
         );
       }
 
       // Read-back guard: the message must be servable through the same
       // unprefixed endpoint the web uses -- this is the exact production
       // bug the suite exists to catch (session visible, messages empty).
-      const readBack = await fetch(`http://127.0.0.1:${port}/session/${created.id}/message`);
+      const readBack = await boundedFetch(
+        "real opencode GET /session/:id/message",
+        `http://127.0.0.1:${port}/session/${created.id}/message`,
+      );
       const entries = (await readBack.json()) as OpencodeMessageEntry[];
       if (!entries.some((entry) => opencodeMessageText(entry).includes(message))) {
         throw new Error("terminal message did not read back through GET /session/:id/message");
