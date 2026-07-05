@@ -177,6 +177,12 @@ async function main(): Promise<void> {
     // Wait for the tail of the injected realistic reply so the full text has
     // rendered (both stub deltas landed) before capturing.
     await waitForText(assistantMessage, "curl -s localhost:3000/health");
+    // Let the transient "Session created" toast dismiss itself -- it
+    // otherwise overlaps the Pull/Push/Create PR buttons in the capture.
+    await page
+      .getByText("Session created")
+      .waitFor({ state: "hidden", timeout: 10_000 })
+      .catch(() => {});
     await page.screenshot({ path: join(OUT_DIR, "session.png") });
     console.log("Captured session.png");
 

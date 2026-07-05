@@ -50,11 +50,14 @@ See [Installing the agent](#installing-the-agent) for what the script does and h
 
 ### 3. Connect and pair the machine
 
-Run the one-time connect, pointing at your hub:
+From the project directory you work in, run the one-time connect, pointing at your hub:
 
 ```bash
-mando connect --hub http://localhost:8080
+cd ~/code/your-project
+mando connect --hub http://localhost:8080 --opencode-auto
 ```
+
+You do not need an opencode server running first: `--opencode-auto` finds one if it exists and starts one for you if it does not. The directory you run this from matters — the web interface scopes its session list to it.
 
 This prints a short pairing code and a link such as `http://localhost:8080/pair?code=ABCD-EFGH`. Open that link (or go to the hub, choose **Pair a machine**, and type the code), then approve it.
 
@@ -64,7 +67,9 @@ Once approved, the machine saves its hub address and its own token to `~/.mando.
 
 ### 4. Drive the session
 
-Back in the browser, the machine now appears in your machine list with an online badge. Select it, open a session, and start sending prompts. The opencode process keeps running on the original machine; the browser is just a window into it.
+Back in the browser, the machine now appears in your machine list with an online badge. Select it and you get the sessions from the project directory you connected in — most recent first, with the newest pinned as LIVE. Open one and start sending prompts. The opencode process keeps running on the original machine; the browser is just a window into it.
+
+The everyday flow after this one-time setup: `cd` into your project, run `opencode` as usual, type `/mando` once, and your terminal session — messages included — is there in the browser, ready to be continued from a phone or any other machine.
 
 ![The machines list, showing an online machine](assets/screenshots/machines.png)
 
@@ -98,6 +103,8 @@ If none of these is set, `mando connect` (and therefore `/mando`) stops with `no
 ```bash
 mando connect --hub http://localhost:8080
 ```
+
+Run this from the project directory whose sessions you want in the web interface, and add `--opencode-auto` if no opencode server is running yet (see Quick start step 3).
 
 ### Hub on another server (remote)
 
@@ -160,7 +167,7 @@ Flags for `mando connect`:
 |---|---|
 | `--hub <url>` | Hub address to connect to. Required for the first pairing unless `MANDO_HUB` is set. |
 | `--opencode-port <port>` | Local opencode port to use, skipping automatic detection. |
-| `--opencode-auto` | Marks the connection as machine-initiated; used by the `/mando` command. |
+| `--opencode-auto` | Detects the local opencode server, and starts one (`opencode serve`, in the current directory) if none is running. Used by the `/mando` command. |
 | `--json` | Machine-readable output. Accepted by `connect`, `disconnect`, and `status`. |
 
 ## The /mando command
@@ -279,6 +286,7 @@ Each package has its own test suite, runnable with `bun test` from that package'
 - Unit tests cover individual functions and modules in isolation (for example the agent's port-detection and reconnect-backoff logic, or the hub's password hashing).
 - Integration tests exercise real components together: the hub's integration tests run against a real PostgreSQL database (by default `postgres://mando:mando@localhost:5433/mando`, matching the port Docker Compose publishes) and make real HTTP and WebSocket requests against the running application.
 - End-to-end tests in `e2e/` use Playwright to drive the full stack in a real browser — logging in, pairing, watching a machine go online and offline, and sending a prompt whose reply streams back — against a real hub, a real agent, and a stub opencode server.
+- A separate gated suite (`e2e/playwright.real.config.ts`) boots an actual `opencode serve` and proves the handoff end to end against it: a session created the way a terminal creates one is discovered, its messages load, and a prompt sent through the hub reaches it. CI runs this on every push, so drift between the stub and real opencode cannot go unnoticed.
 
 To run the hub's integration tests locally, start a database first:
 
