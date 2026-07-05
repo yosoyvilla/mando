@@ -34,6 +34,12 @@ export interface ConnectOpts {
   // here (rather than parsed a second time inside connect()) so opts stays
   // the single source of truth for everything the CLI layer already knew.
   hub?: string;
+  // Not used by connect() itself -- a home for the `--dir` flag index.ts's
+  // CLI parser extracts for `mando tui` (see tui.ts), kept here for the
+  // same reason as `hub` above: opts stays the single source of truth for
+  // everything the CLI layer already parsed, instead of index.ts parsing
+  // argv a second time per-subcommand.
+  dir?: string;
   // Test-only injection points (see task-3.4-report.md "How the daemon
   // spawn is tested"). None of these change connect()'s documented
   // behavior; they only let tests swap the real network/process calls for
@@ -192,7 +198,7 @@ function runningFromCompiledBinary(): boolean {
 // intermediate shell, `proc.pid` and the daemon's own `process.pid` are
 // the same process, so this is a redundant-but-harmless overwrite with an
 // identical value, not a race.
-function defaultSpawnDaemon(opencodePort: number, connectDirectory: string): number {
+export function defaultSpawnDaemon(opencodePort: number, connectDirectory: string): number {
   const daemonArgs = ["_daemon", "--opencode-port", String(opencodePort), "--connect-dir", connectDirectory];
   const args = runningFromCompiledBinary()
     ? [process.execPath, ...daemonArgs]
