@@ -13,6 +13,7 @@ It is meant to be self-hosted. You run the server on a machine you control (your
 - [Connecting a machine](#connecting-a-machine) — including a hub running on another server
 - [Installing the agent](#installing-the-agent) — building the binary, config, commands and flags
 - [The /mando command](#the-mando-command)
+- [Live mirroring with mando tui](#live-mirroring-with-mando-tui)
 - [Configuration](#configuration) — environment variables
 - [Deploying](#deploying) — running the hub on a server
 - [Managing users and machines](#managing-users-and-machines)
@@ -69,7 +70,7 @@ Once approved, the machine saves its hub address and its own token to `~/.mando.
 
 Back in the browser, the machine now appears in your machine list with an online badge. Select it and you get the sessions from the project directory you connected in — most recent first, with the newest pinned as LIVE. Open one and start sending prompts. The opencode process keeps running on the original machine; the browser is just a window into it.
 
-The everyday flow after this one-time setup: `cd` into your project, run `opencode` as usual, type `/mando` once, and your terminal session — messages included — is there in the browser, ready to be continued from a phone or any other machine.
+The everyday flow after this one-time setup: `cd` into your project, run `opencode` as usual, type `/mando` once, and your terminal session — messages included — is there in the browser, ready to be continued from a phone or any other machine. If you want the terminal itself to mirror live rather than just show up in the browser afterward, run `mando tui` instead of `opencode` — see [Live mirroring with mando tui](#live-mirroring-with-mando-tui).
 
 ![The machines list, showing an online machine](assets/screenshots/machines.png)
 
@@ -158,6 +159,7 @@ Commands:
 | `mando connect` | Pairs this machine with a hub (if not already paired) and starts the background process that keeps the tunnel open. Safe to run again; it detects an already-running connection instead of starting a second one. |
 | `mando disconnect` | Stops the background connection. |
 | `mando status` | Reports whether the machine is configured, paired, and currently connected, and when it was last seen. Includes the agent's version. |
+| `mando tui` | Starts an opencode terminal attached to the machine's local opencode server, mirroring live with the browser. See [Live mirroring with mando tui](#live-mirroring-with-mando-tui). |
 | `mando install-command` | Writes the `/mando` command file into opencode's commands directory so it can be run from inside a session. |
 | `mando version` (or `mando --version`) | Prints the agent's release version. |
 
@@ -177,6 +179,42 @@ Flags for `mando connect`:
 Because `/mando` runs `connect` without `--hub`, the machine must already know its hub — either from a previous `mando connect --hub ...` (saved in `~/.mando.json`) or from the `MANDO_HUB` environment variable. On the first ever run with neither set, `/mando` will report that no hub is configured; do the one-time `mando connect --hub ...` (or set `MANDO_HUB`) and it works from then on.
 
 The command takes no arguments. Anything typed after `/mando` is ignored rather than passed to a shell, so it cannot be used to inject commands.
+
+## Live mirroring with mando tui
+
+Everything described so far gets your terminal session into the browser, but the browser only catches up — it does not mirror your terminal live as you type, and a prompt sent from the browser does not appear in your open terminal. `mando tui` closes that gap.
+
+Instead of running `opencode` directly, run `mando tui`. You get the exact same opencode terminal — same keys, same screen — but now the terminal and the browser are two windows onto the same live session: a prompt sent from a phone appears in the open terminal as it streams in, and whatever you type in the terminal streams out to the browser the same way.
+
+```bash
+cd ~/code/your-project
+mando tui
+```
+
+Under the hood, `mando tui` attaches the terminal to the machine's local opencode server — starting one in the current directory if none is running — and makes sure the background connection to the hub is up, the same one `mando connect` starts, so the session is reachable from the browser. If the machine isn't paired with a hub yet, `mando tui` still attaches the terminal (nothing about typing and reading opencode locally requires pairing); it just prints a reminder to run `mando connect --hub <url>` first if you also want the browser side.
+
+Flags:
+
+| Flag | Effect |
+|---|---|
+| `--dir <path>` | Project directory to attach in. Defaults to the current directory. |
+| `--opencode-port <port>` | Local opencode port to attach to, skipping automatic detection. |
+
+If you always want the mirrored terminal, alias it in place of the plain command:
+
+```bash
+alias oc='mando tui'
+```
+
+or, to replace `opencode` outright:
+
+```bash
+alias opencode='mando tui'
+```
+
+Either way, `mando tui` still runs the real `opencode` binary underneath — it attaches to it rather than replacing it, so anything opencode itself does is unaffected.
+
+To be clear about the difference: a plain, non-attached `opencode` terminal still shows up in the web interface with its full history, exactly as described above — that part does not require `mando tui`. What plain `opencode` does not give you is the live mirroring itself; for that, the terminal has to be the one `mando tui` attached.
 
 ## Configuration
 

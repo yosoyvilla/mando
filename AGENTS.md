@@ -50,6 +50,19 @@ exposed to the network.
   body field is silently ignored), and `POST /session/:id/message` without
   `noReply: true` synchronously attempts an assistant reply (harness code
   must always pass `noReply: true`).
+  Opencode's attach mode and its `/tui/*` control endpoints
+  (`append-prompt`, `submit-prompt`, `show-toast`, `select-session`, and the
+  long-poll `GET /tui/control/next`) were also verified live on 1.17.13.
+  `mando tui` (`packages/agent/src/tui.ts`) is the supported way to get a
+  mirrored terminal: it attaches with `opencode attach <url> --dir <dir>`, so
+  a prompt sent through the hub renders in that terminal as it streams and
+  keystrokes typed there stream out to the browser. A plain, non-attached
+  opencode TUI only shares the on-disk session store with the web — no live
+  mirroring. The no-op `SIGINT` handler in `tui.ts` is load-bearing: `mando`
+  shares the attached child's foreground process group, so Ctrl+C delivers
+  `SIGINT` to both at once; without the handler, `mando`'s default behavior
+  would exit it immediately, before it can await and propagate the child's
+  real exit code.
 - **Multi-tenant ownership checks on every machine-scoped route.** Any route
   under `/api/v1/machines/:id/...` must run `requireUser` then
   `requireMachineOwnership` (see `apps/hub/src/auth/middleware.ts`), which
