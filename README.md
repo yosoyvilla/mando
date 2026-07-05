@@ -9,7 +9,7 @@ It is meant to be self-hosted. You run the server on a machine you control (your
 ## Contents
 
 - [Quick start](#quick-start) — a working setup on one machine in about five minutes
-- [How it works](#how-it-works)
+- [How it works](#how-it-works) — including [how this compares to opencode web and /share](#how-this-compares-to-opencode-web-and-share)
 - [Connecting a machine](#connecting-a-machine) — including a hub running on another server
 - [Installing the agent](#installing-the-agent) — building the binary, config, commands and flags
 - [The /mando command](#the-mando-command)
@@ -88,6 +88,21 @@ Three pieces are involved: the browser, the hub, and the machine's own opencode 
 ```
 
 The machine's `mando` agent never listens for incoming connections. It dials out to the hub over a secure WebSocket and keeps that connection open. When you interact with a session in the browser, the hub forwards your request over that same connection to the machine, which relays it to the local opencode server and streams the response back the same way. Because the connection is always started by the machine, nothing on that machine needs to be reachable from the internet, and opencode's own local server is never exposed directly.
+
+### How this compares to opencode web and /share
+
+opencode itself ships two features that sound similar, and for some setups they are all you need:
+
+| | `opencode web` | `/share` | OpenCode Mando |
+|---|---|---|---|
+| What it is | opencode's own browser interface, served by your machine | Public read link to a conversation, synced to opencode's cloud | A self-hosted hub your machines dial out to |
+| Reach | Your local network — or a VPN/Tailscale you set up and secure yourself | Anyone with the link | Any browser, anywhere — you front the hub with your own reverse proxy or CDN for HTTPS |
+| Machines | One (the one serving it) | N/A — shares one conversation, not a machine | A fleet — each paired, each revocable |
+| Inbound exposure | Your machine listens; you manage TLS and what can reach it | None (their cloud) | None — the agent only dials out |
+| Accounts | One shared basic-auth password | None | Multi-user, per-machine tokens, pairing approval |
+| Where your data goes | Stays on your machine | opencode's servers | Infrastructure you control |
+
+If you work from one machine and are always on the same network (or already run Tailscale and are comfortable securing an exposed service), `opencode web` is simpler — use it. `/share` is for showing a conversation to someone, not for driving it. Mando is for the remaining case: several machines, a phone on the move, and nothing on your machines exposed to the internet — while keeping everything on servers you own. They compose rather than compete: Mando drives opencode's standard server API, and `mando tui` uses opencode's own attach mode underneath.
 
 ## Connecting a machine
 
