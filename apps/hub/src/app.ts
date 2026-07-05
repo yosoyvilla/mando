@@ -8,6 +8,7 @@ import { userRoutes } from "./users/routes";
 import { pairingRoutes } from "./pairing/routes";
 import { machineRoutes } from "./machines/routes";
 import { proxyRoutes } from "./proxy/routes";
+import { providerRoutes } from "./providers/routes";
 import { Registry } from "./tunnel/registry";
 import { tunnelWsHandler, websocket } from "./tunnel/ws";
 import { createRateLimiter, DEFAULT_RATE_LIMITS, type RateLimitConfig } from "./middleware/rate-limit";
@@ -92,6 +93,7 @@ export function buildApp(deps: AppDeps): Hono<{ Variables: AuthVariables }> {
   app.route("/", pairingRoutes(deps.sql));
   app.route("/", machineRoutes(deps.sql, registry));
   app.route("/", proxyRoutes(deps.sql, registry));
+  app.route("/", providerRoutes(deps.sql, deps.config));
   app.route("/", auditRoutes(deps.sql));
 
   app.get(
