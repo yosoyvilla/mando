@@ -25,6 +25,11 @@ const Schema = z.object({
   // follows the exact same override pattern as MANDO_RATE_LIMIT_LOGIN_MAX
   // above rather than introducing a new shape.
   MANDO_RATE_LIMIT_IMAGES_MAX: z.coerce.number().int().positive().optional(),
+  // Overrides DEFAULT_RATE_LIMITS.chat's max -- POST .../messages calls the
+  // user's own (potentially costly) provider for every message, so this
+  // follows the exact same override pattern as MANDO_RATE_LIMIT_IMAGES_MAX
+  // above rather than introducing a new shape.
+  MANDO_RATE_LIMIT_CHAT_MAX: z.coerce.number().int().positive().optional(),
   // How often index.ts re-runs retention.ts's runRetention() sweep after its
   // initial startup pass. Defaults to hourly (retention.ts) when unset --
   // this only lets an operator override the cadence, same pattern as the
@@ -84,6 +89,7 @@ export type Config = {
   rateLimitPairingMax?: number;
   rateLimitWsAgentMax?: number;
   rateLimitImagesMax?: number;
+  rateLimitChatMax?: number;
   retentionIntervalMs?: number;
   encryptionKey?: Buffer;
   imageDir: string;
@@ -104,6 +110,7 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
     rateLimitPairingMax: p.MANDO_RATE_LIMIT_PAIRING_MAX,
     rateLimitWsAgentMax: p.MANDO_RATE_LIMIT_WS_AGENT_MAX,
     rateLimitImagesMax: p.MANDO_RATE_LIMIT_IMAGES_MAX,
+    rateLimitChatMax: p.MANDO_RATE_LIMIT_CHAT_MAX,
     retentionIntervalMs: p.MANDO_RETENTION_INTERVAL_MS,
     encryptionKey: p.MANDO_ENCRYPTION_KEY ? decodeEncryptionKey(p.MANDO_ENCRYPTION_KEY) : undefined,
     imageDir: p.MANDO_IMAGE_DIR,
