@@ -43,9 +43,11 @@ export function SessionContinuityHint() {
     >
       <p className="flex-1">
         What you do here is saved to the same session your machine sees, but
-        an already-open plain opencode terminal will not show it — reopen the
-        session there when you switch back. Terminals started with{" "}
-        <code className="font-mono text-fg">mando tui</code> mirror live.
+        an already-open plain opencode terminal will not show it — run{" "}
+        <code className="font-mono text-fg">/mando-refresh</code> there, or
+        reopen the session there, when you switch back. Terminals started
+        with <code className="font-mono text-fg">mando tui</code> mirror
+        live.
       </p>
       <Button
         intent="plain"

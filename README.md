@@ -189,7 +189,10 @@ Flags for `mando connect`:
 
 ## The /mando command
 
-`mando install-command` writes a `/mando` slash command into opencode's commands directory (`~/.config/opencode/commands/mando.md`, or wherever `OPENCODE_CONFIG_DIR` points). Typing `/mando` inside an opencode session runs `mando connect --opencode-auto --json` for you, so you can connect and reconnect without leaving the session.
+`mando install-command` writes two slash commands into opencode's commands directory (`~/.config/opencode/commands/`, or wherever `OPENCODE_CONFIG_DIR` points):
+
+- `/mando` runs `mando connect --opencode-auto --json` for you, so you can connect and reconnect without leaving the session.
+- `/mando-refresh` catches an already-open plain terminal up with what happened in the session remotely: it asks the assistant to quote, verbatim and in order, every message that arrived after your last one there. The missed exchange appears in the terminal as a normal reply — a replay, not a redraw, so it costs one model call and works because the assistant's context always includes the remote messages (see [how a session moves between terminal and browser](#how-a-session-moves-between-terminal-and-browser)). If nothing happened remotely, it says so in one line.
 
 Because `/mando` runs `connect` without `--hub`, the machine must already know its hub — either from a previous `mando connect --hub ...` (saved in `~/.mando.json`) or from the `MANDO_HUB` environment variable. On the first ever run with neither set, `/mando` will report that no hub is configured; do the one-time `mando connect --hub ...` (or set `MANDO_HUB`) and it works from then on.
 
@@ -238,9 +241,9 @@ Whether or not you use `mando tui`, there is exactly one session and it lives in
 | Your terminal work, seen from the browser | Complete — shown when you open the session there, or when you come back to its tab | Streams live as you type |
 | Your browser or phone work, seen in the open terminal | Never redrawn — reopen the session in the terminal to see it | Streams live |
 
-The seam to know about is that bottom-left cell: a plain `opencode` terminal only redraws from its own activity. If you step away, continue the session from your phone, and come back, your still-open terminal will look exactly as you left it — and typing a new prompt there does not bring the missed messages into view either; only reopening the session does (pick it from the session list, or restart `opencode` and select it). Nothing is lost in the meantime: the work you did remotely is in the same session, and the assistant's context always includes those exchanges because everything reads from the same store. It is purely the display of an already-open plain terminal that does not refresh. The web interface shows a one-time note about this, and this is exactly the behavior `mando tui` exists to remove.
+The seam to know about is that bottom-left cell: a plain `opencode` terminal only redraws from its own activity. If you step away, continue the session from your phone, and come back, your still-open terminal will look exactly as you left it — and typing a new prompt there does not bring the missed messages into view either; only reopening the session does (pick it from the session list, or restart `opencode` and select it) — or run `/mando-refresh`, which replays the missed messages into the terminal as an assistant reply without leaving the session. Nothing is lost in the meantime: the work you did remotely is in the same session, and the assistant's context always includes those exchanges because everything reads from the same store. It is purely the display of an already-open plain terminal that does not refresh. The web interface shows a one-time note about this, and this is exactly the behavior `mando tui` exists to remove.
 
-So the everyday flow with plain `opencode` is: work in the terminal, step away, continue on your phone, come back, reopen the session, keep going. If you would rather never think about the reopen step, use `mando tui` (or the alias above) and both sides stay live.
+So the everyday flow with plain `opencode` is: work in the terminal, step away, continue on your phone, come back, run `/mando-refresh` (or reopen the session), keep going. If you would rather never think about the reopen step, use `mando tui` (or the alias above) and both sides stay live.
 
 ## Configuration
 

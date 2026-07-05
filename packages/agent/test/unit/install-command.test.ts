@@ -18,25 +18,39 @@ afterEach(() => {
 });
 
 describe("installCommand", () => {
-  it("writes the /mando command file under OPENCODE_CONFIG_DIR/commands/mando.md", () => {
+  it("writes /mando and /mando-refresh command files under OPENCODE_CONFIG_DIR/commands/", () => {
     const written = installCommand();
 
-    const expectedPath = join(tmpDir!, "commands", "mando.md");
-    expect(written).toBe(expectedPath);
-    expect(existsSync(expectedPath)).toBe(true);
+    const expectedMando = join(tmpDir!, "commands", "mando.md");
+    const expectedRefresh = join(tmpDir!, "commands", "mando-refresh.md");
+    expect(written).toEqual([expectedMando, expectedRefresh]);
+    expect(existsSync(expectedMando)).toBe(true);
+    expect(existsSync(expectedRefresh)).toBe(true);
   });
 
-  it("contains the description frontmatter and the arg-free connect line", () => {
-    const written = installCommand();
-    const content = readFileSync(written, "utf-8");
+  it("mando.md contains the description frontmatter and the arg-free connect line", () => {
+    const [mandoPath] = installCommand();
+    const content = readFileSync(mandoPath, "utf-8");
 
     expect(content).toContain("description:");
     expect(content).toContain("!`mando connect --opencode-auto --json`");
   });
 
+  it("mando-refresh.md replays remote activity without tools and has a no-op reply", () => {
+    const [, refreshPath] = installCommand();
+    const content = readFileSync(refreshPath, "utf-8");
+
+    expect(content).toContain("description:");
+    expect(content).toContain("Without using any tools");
+    expect(content).toContain("Nothing new since your last message here.");
+    // The replay must not invite tool use or commentary that could mutate state.
+    expect(content).not.toContain("!`");
+    expect(content).not.toContain("$ARGUMENTS");
+  });
+
   it("never interpolates $ARGUMENTS into the shell line (regression guard for the RCE fix)", () => {
-    const written = installCommand();
-    const content = readFileSync(written, "utf-8");
+    const [mandoPath] = installCommand();
+    const content = readFileSync(mandoPath, "utf-8");
 
     expect(content).not.toContain("$ARGUMENTS");
   });
@@ -47,7 +61,8 @@ describe("installCommand", () => {
 
     const written = installCommand();
 
-    expect(written).toBe(join(nestedDir, "commands", "mando.md"));
-    expect(existsSync(written)).toBe(true);
+    expect(written[0]).toBe(join(nestedDir, "commands", "mando.md"));
+    expect(existsSync(written[0])).toBe(true);
+    expect(existsSync(written[1])).toBe(true);
   });
 });
