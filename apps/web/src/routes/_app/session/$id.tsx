@@ -27,6 +27,7 @@ import {
   SendIcon,
 } from "@/components/icons/lucide";
 import { ComposerAttachments } from "@/components/composer-attachments";
+import { AttachedFiles } from "@/components/attached-files";
 import { useAgentStore } from "@/stores/agent-store";
 import { useMachineStore } from "@/stores/machine-store";
 import { useModelStore } from "@/stores/model-store";
@@ -39,6 +40,7 @@ import {
   mutateSessionMessages,
   type MessageWithParts,
   type Part,
+  type FilePart,
   type ToolPart,
   type PermissionRequest,
   type QuestionAnswer,
@@ -317,6 +319,14 @@ function getMessageContent(parts: Part[]): string {
     )
     .map((part) => part.text)
     .join("\n\n");
+}
+
+function isFilePart(part: Part): part is FilePart {
+  return part.type === "file";
+}
+
+function getFileParts(parts: Part[]): FilePart[] {
+  return parts.filter(isFilePart);
 }
 
 function getAssistantError(message: MessageWithParts) {
@@ -705,13 +715,18 @@ const MessageItem = memo(function MessageItem({
   onQuestionResolved: (requestId: string) => void;
 }) {
   const textContent = getMessageContent(message.parts);
+  const fileParts = getFileParts(message.parts);
   const isAssistant = message.info.role === "assistant";
   const messageError = isAssistant ? getAssistantError(message) : null;
   const toolCalls = message.parts.filter(isToolPart);
   const messagePermissions = pendingPermissions.filter(
     (perm) => perm.tool?.messageID === message.info.id,
   );
-  const hasMainContent = !!(textContent || messageError);
+  const hasMainContent = !!(
+    textContent ||
+    messageError ||
+    fileParts.length > 0
+  );
 
   return (
     <div className="py-3 px-6">
@@ -743,6 +758,7 @@ const MessageItem = memo(function MessageItem({
                 className={textContent ? "mt-2" : ""}
               />
             )}
+            {fileParts.length > 0 && <AttachedFiles parts={fileParts} />}
           </div>
         </div>
       )}
@@ -778,9 +794,10 @@ const MessageItem = memo(function MessageItem({
 function hasVisibleContent(message: MessageWithParts): boolean {
   const textContent = getMessageContent(message.parts);
   const hasToolCalls = message.parts.some(isToolPart);
+  const hasFileParts = message.parts.some(isFilePart);
   const messageError =
     message.info.role === "assistant" ? getAssistantError(message) : null;
-  return !!(textContent || hasToolCalls || messageError);
+  return !!(textContent || hasToolCalls || hasFileParts || messageError);
 }
 
 function SessionPage() {
