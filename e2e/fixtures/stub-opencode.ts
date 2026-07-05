@@ -56,6 +56,23 @@ interface StubMessageEntry {
   parts: StubPart[];
 }
 
+// Mirrors the installed SDK's `PermissionRequest`
+// (`{id,sessionID,permission,patterns,metadata,always,tool?}`, confirmed
+// against `@opencode-ai/sdk` 1.14.41's types.gen.d.ts). A permission's
+// "directory" isn't a field on the request itself -- like real opencode, it
+// is inherited from the session that asked for it (see `permissionDirectory`
+// below), so listing/replying to it needs the same `?directory=` scoping
+// `GET /session` already has.
+interface StubPermission {
+  id: string;
+  sessionID: string;
+  permission: string;
+  patterns: string[];
+  metadata: Record<string, unknown>;
+  always: string[];
+  tool?: { messageID: string; callID: string };
+}
+
 export interface StubOpencode {
   port: number;
   stop(): Promise<void>;
@@ -113,8 +130,17 @@ const DEFAULT_DIRECTORY = "/tmp/mando-e2e-stub-default";
 export async function startStubOpencode(): Promise<StubOpencode> {
   const sessions = new Map<string, StubSession>();
   const messages = new Map<string, StubMessageEntry[]>();
+  const permissions = new Map<string, StubPermission>();
   const activeSessions = new Set<string>();
   const sseClients = new Set<ServerResponse>();
+
+  // The directory a permission is scoped to is whatever its own session is
+  // scoped to (falls back to the server's own cwd project, same as an
+  // unknown/deleted session would on real opencode) -- there is no separate
+  // per-permission directory to track.
+  function permissionDirectory(permission: StubPermission): string {
+    return sessions.get(permission.sessionID)?.directory ?? DEFAULT_DIRECTORY;
+  }
 
   // Real `/event` frames are `data: {"id":"evt_...","type":"...",
   // "properties":{...}}` -- the payload field is `properties`, confirmed by
@@ -331,9 +357,80 @@ export async function startStubOpencode(): Promise<StubOpencode> {
     // Legacy flat permission/question surfaces (bare arrays) -- see
     // use-opencode.ts's `usePermissions`/`useQuestions` comment for why
     // these, not the newer per-session `/api/permission/request` V2 ones,
-    // are what the app targets.
-    if (method === "GET" && path === "/permission") return sendJson(res, []);
+    // are what the app targets. `GET /permission` is DIRECTORY-SCOPED on
+    // real opencode 1.17.13 (verified live -- see docs/superpowers/plans's
+    // Global Constraints): omitting `?directory=` serves the server's own
+    // cwd project (`DEFAULT_DIRECTORY` here) rather than every permission
+    // regardless of project, exactly like `GET /session` above would if it
+    // enforced the same default instead of returning everything.
+    if (method === "GET" && path === "/permission") {
+      const directory = url.searchParams.get("directory") ?? DEFAULT_DIRECTORY;
+      const list = [...permissions.values()].filter(
+        (permission) => permissionDirectory(permission) === directory,
+      );
+      return sendJson(res, list);
+    }
     if (method === "GET" && path === "/question") return sendJson(res, []);
+
+    // TEST-ONLY: lets a Playwright spec push a permission request into the
+    // stub directly, standing in for a real tool call that would otherwise
+    // need to hit an actual permission gate to trigger one. Not part of
+    // real opencode's API surface -- gated to this fixture only, never
+    // reachable through the hub's proxy in production since nothing there
+    // ever forwards `/_stub/*`.
+    if (method === "POST" && path === "/_stub/permission") {
+      const body = (await readJsonBody(req)) as {
+        sessionID?: string;
+        permission?: string;
+        patterns?: string[];
+        metadata?: Record<string, unknown>;
+        always?: string[];
+        tool?: { messageID: string; callID: string };
+      };
+      if (!body.sessionID || !sessions.has(body.sessionID)) {
+        return sendJson(res, { error: "unknown sessionID" }, 400);
+      }
+      const permission: StubPermission = {
+        id: stubId("prm"),
+        sessionID: body.sessionID,
+        permission: body.permission ?? "bash",
+        patterns: body.patterns ?? ["*"],
+        metadata: body.metadata ?? {},
+        always: body.always ?? [],
+        ...(body.tool ? { tool: body.tool } : {}),
+      };
+      permissions.set(permission.id, permission);
+      broadcast({ type: "permission.asked", properties: { ...permission } });
+      return sendJson(res, permission, 201);
+    }
+
+    // `POST /permission/:id/reply` (confirmed against a live opencode
+    // 1.17.13) is scoped by the SAME `?directory=` the list above uses --
+    // a reply targeting the wrong (or missing) directory 404s with
+    // `{"_tag":"PermissionNotFoundError"}` even for a request that
+    // legitimately exists under a different directory, rather than
+    // succeeding or 404ing with a generic body. This is what makes
+    // `useReplyPermission` (apps/web/src/hooks/use-opencode.ts) sending the
+    // directory param a real correctness requirement, not a no-op.
+    const permissionReplyMatch = path.match(/^\/permission\/([^/]+)\/reply$/);
+    if (method === "POST" && permissionReplyMatch) {
+      await readJsonBody(req);
+      const [, id] = permissionReplyMatch;
+      const permission = permissions.get(id);
+      const directory = url.searchParams.get("directory") ?? DEFAULT_DIRECTORY;
+      const found = permission && permissionDirectory(permission) === directory;
+
+      if (!found) {
+        return sendJson(res, { _tag: "PermissionNotFoundError" }, 404);
+      }
+
+      permissions.delete(id);
+      broadcast({
+        type: "permission.replied",
+        properties: { sessionID: permission.sessionID, requestID: id, reply: "once" },
+      });
+      return sendJson(res, true);
+    }
 
     // `GET /vcs/diff/raw` (no /api prefix, same family as `/vcs/diff` and
     // `/vcs/status`) -- real opencode returns the working tree's unified
@@ -501,10 +598,9 @@ export async function startStubOpencode(): Promise<StubOpencode> {
       }
     }
 
-    // Legacy flat reply/reject paths -- see the GET /permission and
-    // GET /question handlers above for why these, not per-session V2
-    // equivalents, are real.
-    if (method === "POST" && /^\/permission\/[^/]+\/reply$/.test(path)) return sendJson(res, true);
+    // Legacy flat question reply/reject paths -- see the GET /question
+    // handler above for why these, not per-session V2 equivalents, are
+    // real. (`/permission/:id/reply` is handled above, directory-scoped.)
     if (method === "POST" && /^\/question\/[^/]+\/reply$/.test(path)) return sendJson(res, true);
     if (method === "POST" && /^\/question\/[^/]+\/reject$/.test(path)) return sendJson(res, true);
 

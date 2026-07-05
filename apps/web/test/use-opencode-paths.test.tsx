@@ -24,6 +24,8 @@ import {
   useReplyQuestion,
   useRejectQuestion,
   useSelectedMachine,
+  permissionsPath,
+  questionsPath,
 } from "../src/hooks/use-opencode";
 import { useMachineStore } from "../src/stores/machine-store";
 
@@ -166,6 +168,12 @@ describe("useOpencode mutation hooks -> real opencode paths", () => {
     expect(init.method).toBe("POST");
   });
 
+  // `useReplyPermission`/`useReplyQuestion`/`useRejectQuestion` now also
+  // compose `useSelectedMachine()` (to read `connectDirectory` for the
+  // `?directory=` param -- see the directory-scoped describe block below),
+  // which fires its own `/api/v1/machines` fetch alongside the reply POST.
+  // Match on the reply call's own URL/method rather than call order so that
+  // extra fetch doesn't race these assertions.
   it("useReplyPermission POSTs {reply,message} to /permission/:id/reply", async () => {
     fetchMock = mock<FetchFn>(() => Promise.resolve(jsonResponse(true)));
     globalThis.fetch = fetchMock as unknown as typeof fetch;
@@ -175,7 +183,7 @@ describe("useOpencode mutation hooks -> real opencode paths", () => {
       await result.current("perm_1", "once", "ok");
     });
 
-    const [url, init = {}] = fetchMock.mock.calls[0];
+    const [url, init = {}] = findCall(`${PROXY}/permission/perm_1/reply`) ?? [];
     expect(url).toBe(`${PROXY}/permission/perm_1/reply`);
     expect(init.method).toBe("POST");
     expect(JSON.parse(init.body as string)).toEqual({
@@ -193,7 +201,7 @@ describe("useOpencode mutation hooks -> real opencode paths", () => {
       await result.current("q_1", [["a"], ["b"]]);
     });
 
-    const [url, init = {}] = fetchMock.mock.calls[0];
+    const [url, init = {}] = findCall(`${PROXY}/question/q_1/reply`) ?? [];
     expect(url).toBe(`${PROXY}/question/q_1/reply`);
     expect(init.method).toBe("POST");
     expect(JSON.parse(init.body as string)).toEqual({ answers: [["a"], ["b"]] });
@@ -208,7 +216,7 @@ describe("useOpencode mutation hooks -> real opencode paths", () => {
       await result.current("q_1");
     });
 
-    const [url, init = {}] = fetchMock.mock.calls[0];
+    const [url, init = {}] = findCall(`${PROXY}/question/q_1/reject`) ?? [];
     expect(url).toBe(`${PROXY}/question/q_1/reject`);
     expect(init.method).toBe("POST");
   });
@@ -280,5 +288,100 @@ describe("useOpencode hooks -> scoped to the machine's connectDirectory", () => 
     );
     expect(createCall).toBeDefined();
     expect(JSON.parse(createCall?.[1]?.body as string)).toEqual({});
+  });
+
+  // Real opencode 1.17.13 scopes `/permission` and `/question` (and their
+  // reply/reject endpoints) to the connect directory exactly like
+  // `/session` -- verified live for `/permission`, see
+  // docs/superpowers/plans's Global Constraints. Omitting `?directory=`
+  // targets the server's own cwd project instead, and a reply without the
+  // matching directory 404s even for a request that legitimately exists.
+
+  it("usePermissions GETs /permission?directory=<connectDirectory> once the machine is known", async () => {
+    fetchMock = mockMachineAndSessionFetch();
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    renderHook(() => usePermissions(), { wrapper });
+
+    const expected = `${PROXY}${permissionsPath(MACHINE.connectDirectory)}`;
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([url]) => url === expected)).toBe(
+        true,
+      ),
+    );
+  });
+
+  it("useQuestions GETs /question?directory=<connectDirectory> once the machine is known", async () => {
+    fetchMock = mockMachineAndSessionFetch();
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    renderHook(() => useQuestions(), { wrapper });
+
+    const expected = `${PROXY}${questionsPath(MACHINE.connectDirectory)}`;
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([url]) => url === expected)).toBe(
+        true,
+      ),
+    );
+  });
+
+  it("useReplyPermission POSTs to /permission/:id/reply?directory=<connectDirectory> once the machine is known", async () => {
+    fetchMock = mockMachineAndSessionFetch();
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const { result } = renderHook(
+      () => ({ reply: useReplyPermission(), machine: useSelectedMachine() }),
+      { wrapper },
+    );
+    await waitFor(() => expect(result.current.machine).not.toBeNull());
+
+    await act(async () => {
+      await result.current.reply("perm_1", "once");
+    });
+
+    const expected = `${PROXY}/permission/perm_1/reply?directory=${encodeURIComponent(MACHINE.connectDirectory)}`;
+    const call = fetchMock.mock.calls.find(([url]) => url === expected);
+    expect(call).toBeDefined();
+    expect(call?.[1]?.method).toBe("POST");
+  });
+
+  it("useReplyQuestion POSTs to /question/:id/reply?directory=<connectDirectory> once the machine is known", async () => {
+    fetchMock = mockMachineAndSessionFetch();
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const { result } = renderHook(
+      () => ({ reply: useReplyQuestion(), machine: useSelectedMachine() }),
+      { wrapper },
+    );
+    await waitFor(() => expect(result.current.machine).not.toBeNull());
+
+    await act(async () => {
+      await result.current.reply("q_1", [["a"]]);
+    });
+
+    const expected = `${PROXY}/question/q_1/reply?directory=${encodeURIComponent(MACHINE.connectDirectory)}`;
+    const call = fetchMock.mock.calls.find(([url]) => url === expected);
+    expect(call).toBeDefined();
+    expect(call?.[1]?.method).toBe("POST");
+  });
+
+  it("useRejectQuestion POSTs to /question/:id/reject?directory=<connectDirectory> once the machine is known", async () => {
+    fetchMock = mockMachineAndSessionFetch();
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const { result } = renderHook(
+      () => ({ reject: useRejectQuestion(), machine: useSelectedMachine() }),
+      { wrapper },
+    );
+    await waitFor(() => expect(result.current.machine).not.toBeNull());
+
+    await act(async () => {
+      await result.current.reject("q_1");
+    });
+
+    const expected = `${PROXY}/question/q_1/reject?directory=${encodeURIComponent(MACHINE.connectDirectory)}`;
+    const call = fetchMock.mock.calls.find(([url]) => url === expected);
+    expect(call).toBeDefined();
+    expect(call?.[1]?.method).toBe("POST");
   });
 });

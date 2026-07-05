@@ -240,17 +240,52 @@ export function useGitDiff() {
 // opencode's current tool-permission flow only ever emits `permission.v2.*`
 // internally, this UI may not surface live prompts even though the wiring
 // is now correct against the endpoints it targets -- flagged in the report.
+//
+// Both the legacy list AND its reply endpoint are DIRECTORY-SCOPED on real
+// opencode 1.17.13 (verified live, see docs/superpowers/plans -- Global
+// Constraints): omitting `?directory=<abs path>` serves/targets the
+// server's own cwd project instead of the machine's connect directory, and
+// a reply without the matching `?directory=` 404s
+// (`{"_tag":"PermissionNotFoundError"}`) even for a request that legitimately
+// exists under a different directory. `permissionsPath`/`questionsPath`
+// mirror `sessionsPath` above -- shared with use-opencode-events.ts so its
+// SSE-driven `mutate(permissionsKey(...))`/`mutate(questionsKey(...))` calls
+// target the exact same SWR key tuple these hooks subscribe with.
+export function permissionsPath(connectDirectory?: string | null): string {
+  return connectDirectory
+    ? `/permission?directory=${encodeURIComponent(connectDirectory)}`
+    : "/permission";
+}
+
+export function questionsPath(connectDirectory?: string | null): string {
+  return connectDirectory
+    ? `/question?directory=${encodeURIComponent(connectDirectory)}`
+    : "/question";
+}
+
+// A reply/reject call targets one specific request id that already belongs
+// to a directory -- the query param here is the same `?directory=` the list
+// endpoints use, just appended after the id segment instead of the bare path.
+function withDirectory(path: string, connectDirectory?: string | null): string {
+  return connectDirectory
+    ? `${path}?directory=${encodeURIComponent(connectDirectory)}`
+    : path;
+}
+
 export function usePermissions() {
   const backend = useBackend();
+  const machine = useSelectedMachine();
+  const path = permissionsPath(machine?.connectDirectory);
 
   return useSWR(
-    backend ? ([backend.machineId, "/permission"] as const) : null,
+    backend ? ([backend.machineId, path] as const) : null,
     fetcher,
   );
 }
 
 export function useReplyPermission() {
   const backend = useBackend();
+  const machine = useSelectedMachine();
 
   return async (
     requestId: string,
@@ -259,7 +294,11 @@ export function useReplyPermission() {
   ): Promise<any> => {
     if (!backend) throw new Error("No machine selected");
 
-    return opencodeJson(backend.machineId, `/permission/${requestId}/reply`, {
+    const path = withDirectory(
+      `/permission/${requestId}/reply`,
+      machine?.connectDirectory,
+    );
+    return opencodeJson(backend.machineId, path, {
       method: "POST",
       body: JSON.stringify({ reply, message }),
     });
@@ -268,20 +307,27 @@ export function useReplyPermission() {
 
 export function useQuestions() {
   const backend = useBackend();
+  const machine = useSelectedMachine();
+  const path = questionsPath(machine?.connectDirectory);
 
   return useSWR(
-    backend ? ([backend.machineId, "/question"] as const) : null,
+    backend ? ([backend.machineId, path] as const) : null,
     fetcher,
   );
 }
 
 export function useReplyQuestion() {
   const backend = useBackend();
+  const machine = useSelectedMachine();
 
   return async (requestId: string, answers: string[][]): Promise<any> => {
     if (!backend) throw new Error("No machine selected");
 
-    return opencodeJson(backend.machineId, `/question/${requestId}/reply`, {
+    const path = withDirectory(
+      `/question/${requestId}/reply`,
+      machine?.connectDirectory,
+    );
+    return opencodeJson(backend.machineId, path, {
       method: "POST",
       body: JSON.stringify({ answers }),
     });
@@ -290,11 +336,16 @@ export function useReplyQuestion() {
 
 export function useRejectQuestion() {
   const backend = useBackend();
+  const machine = useSelectedMachine();
 
   return async (requestId: string): Promise<any> => {
     if (!backend) throw new Error("No machine selected");
 
-    return opencodeJson(backend.machineId, `/question/${requestId}/reject`, {
+    const path = withDirectory(
+      `/question/${requestId}/reject`,
+      machine?.connectDirectory,
+    );
+    return opencodeJson(backend.machineId, path, {
       method: "POST",
     });
   };

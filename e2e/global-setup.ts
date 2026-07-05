@@ -60,7 +60,14 @@ import { startStubOpencode, type StubOpencode } from "./fixtures/stub-opencode";
 import { isMachineOnline, loginForCookie } from "./fixtures/hub-api";
 import { DB_URL, REPO_ROOT, seedMachineViaSubprocess } from "./fixtures/machine-lifecycle";
 import { runToCompletion, waitFor, waitForExit } from "./fixtures/proc-utils";
-import { ADMIN_EMAIL, ADMIN_PASSWORD, HUB_BASE_URL, HUB_PORT, MACHINE_NAME } from "./harness-config";
+import {
+  ADMIN_EMAIL,
+  ADMIN_PASSWORD,
+  HUB_BASE_URL,
+  HUB_PORT,
+  MACHINE_NAME,
+  STUB_PORT_ENV,
+} from "./harness-config";
 
 const USING_CI_DATABASE = Boolean(process.env.TEST_DATABASE_URL);
 
@@ -199,6 +206,9 @@ export default async function globalSetup(_config: FullConfig): Promise<() => Pr
   let stub: StubOpencode | null = null;
   try {
     stub = await startStubOpencode();
+    // See harness-config.ts's `STUB_PORT_ENV` doc comment -- this makes the
+    // stub's port reachable from spec files themselves, not just this file.
+    process.env[STUB_PORT_ENV] = String(stub.port);
     const { pidFile } = await bringMachineOnline(stub.port, tmpDir);
 
     const cookie = await loginForCookie(HUB_BASE_URL, ADMIN_EMAIL, ADMIN_PASSWORD);
