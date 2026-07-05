@@ -265,7 +265,7 @@ From the Images section you can generate a new image from a prompt, or edit an e
 Two honest notes:
 
 - Your provider needs to expose the OpenAI Images API (`POST /images/generations` and `POST /images/edits`) — in practice, a text-to-image model served behind an OpenAI-compatible endpoint. Not every provider does this, and Mando does not translate between API shapes.
-- Because the base URL is something you control rather than something Mando ships with, the hub validates it before saving and again before every request: HTTPS only, and it refuses to call a private, loopback, link-local, or other non-public address — including ones a hostname might resolve to. It only ever talks to public provider hosts.
+- Because the base URL is something you control rather than something Mando ships with, the hub validates it before saving and again before every request: HTTPS only, and it refuses to call a private, loopback, link-local, or other non-public address — including ones a hostname might resolve to — and it refuses redirects. A narrow DNS-rebinding race between that check and the connection is a known, accepted limitation: the guard makes SSRF hard, not impossible.
 
 ## Live mirroring with mando tui
 
@@ -403,6 +403,7 @@ For uptime monitoring, point an external checker — [healthchecks.io](https://h
 - Machines never share that login. Each machine goes through a pairing flow: it requests a short-lived pairing code, a logged-in user approves it in the browser, and only then does the machine receive its own long-lived, revocable token. Only a hash of each token is stored, never the token itself.
 - Revoking a machine immediately drops its live connection and invalidates its token.
 - A machine's local opencode server is never exposed to the internet. It only talks to the `mando` agent over `localhost`, and the agent only ever makes outbound connections to the hub. Nothing on the machine accepts inbound connections. Requests the hub relays are constrained to the local opencode server, so the tunnel cannot be steered at other hosts.
+- Provider API keys for the Images feature are encrypted at rest (AES-256-GCM, keyed by `MANDO_ENCRYPTION_KEY`), never returned to any client and never logged. The provider base URL is SSRF-guarded before saving and before every request (see [Generating images](#generating-images)).
 - Run the hub behind TLS whenever it is reachable from the internet, and behind a private network or VPN if you do not need it public.
 
 ## Troubleshooting

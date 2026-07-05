@@ -74,6 +74,13 @@ spec:
             #     secretKeyRef:
             #       name: mando-hub-secrets
             #       key: MANDO_ADMIN_PASSWORD
+            # Enables the Images feature (per-user provider keys, encrypted at
+            # rest). Omit to leave image generation disabled. See secret.example.yaml.
+            # - name: MANDO_ENCRYPTION_KEY
+            #   valueFrom:
+            #     secretKeyRef:
+            #       name: mando-hub-secrets
+            #       key: MANDO_ENCRYPTION_KEY
           resources:
             requests:
               cpu: 100m
