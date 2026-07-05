@@ -35,6 +35,21 @@ exposed to the network.
 - **Every tunnel frame is Zod-validated on both sides**, using the schemas in
   `@mando/protocol` (`packages/protocol/src/frames.ts`). Never hand-construct
   or hand-parse a frame; always go through `parseFrame` / `serializeFrame`.
+- **The web talks to opencode's UNPREFIXED API family only.** opencode
+  (1.17.13) exposes two parallel endpoint families on the same server, backed
+  by different stores. The `/api/*` family only serves sessions created
+  through the server API; sessions from a plain `opencode` TUI, `opencode
+  run`, or `opencode attach` are served EXCLUSIVELY by the unprefixed family
+  (`GET /session?directory=`, `GET/POST /session/:id/message`, `POST
+  /session/:id/abort`, `GET /session/status`, `GET /event` — SSE payloads
+  under `properties`, not `data`). Regressing any web call to `/api/*`
+  reintroduces the v1.0.0 bug where a user's terminal session listed but
+  showed no messages; the e2e stub answers `/api/*` session/event paths with
+  404 on purpose so such a regression fails tests loudly. Two verified
+  contract quirks: `directory` on `POST /session` must be a QUERY param (a
+  body field is silently ignored), and `POST /session/:id/message` without
+  `noReply: true` synchronously attempts an assistant reply (harness code
+  must always pass `noReply: true`).
 - **Multi-tenant ownership checks on every machine-scoped route.** Any route
   under `/api/v1/machines/:id/...` must run `requireUser` then
   `requireMachineOwnership` (see `apps/hub/src/auth/middleware.ts`), which
@@ -91,9 +106,20 @@ Integration tests default to `TEST_DATABASE_URL=postgres://mando:mando@localhost
 which matches the port Docker Compose publishes — set `TEST_DATABASE_URL` to
 override.
 
-Browser end-to-end tests (Playwright, driving the built web SPA against a
-real hub) are planned but not yet implemented in this repository; when added,
-document the exact command here.
+Browser end-to-end tests live in `e2e/` (its own package, not a workspace
+member). Always run them from inside `e2e/`:
+
+```bash
+cd e2e
+bunx playwright test                                    # default suite (stub opencode)
+bunx playwright test --config playwright.real.config.ts # gated suite (real opencode binary required)
+```
+
+The default suite boots the full stack (real hub, real agent daemon, built
+web SPA) against a faithful stub opencode server. The gated suite swaps ONLY
+the stub for a real `opencode serve` and proves the terminal-session handoff
+end to end; CI runs both on every push (`.github/workflows/ci.yml`, jobs
+`test` and `e2e-real-opencode`).
 
 ## Testing philosophy
 
@@ -110,7 +136,7 @@ it's considered done:
    through the proxy API is relayed to that agent and back — exercising the
    full pairing-to-proxy path without mocking any layer of it.
 3. **End-to-end (browser)** — Playwright driving the actual web SPA against a
-   running hub. Not yet implemented (see above); add it here once it lands.
+   running hub. Implemented — see `e2e/` and the two suites described above.
 
 A feature isn't done until every layer that covers it passes — a green unit
 suite with a stubbed integration point is not sufficient for anything that
@@ -137,6 +163,24 @@ touches the hub's HTTP/WS surface or the tunnel protocol.
   a **single hub replica** — the Kubernetes manifests in `deploy/k8s` reflect
   this. Scaling to multiple replicas requires a shared pub/sub (or
   equivalent) for connection state; don't add a second replica without that.
+- **The daemon is started by re-executing the mando binary itself** with a
+  hidden `_daemon` argv (`packages/agent/src/index.ts` dispatch,
+  `connect.ts`'s `defaultSpawnDaemon`). Never spawn `bun daemon.ts` from
+  `connect`: in a `bun build --compile` binary `import.meta.dir` is a
+  virtual `/$bunfs/...` path with no file on disk, so that spawn dies
+  silently (the original v1.0.0 bug — `connect` printed "Connected" while
+  no daemon ran). `packages/agent/test/compiled-binary.test.ts` builds and
+  runs the real compiled artifact to keep this honest.
+- **`connectDirectory` is the session-list scoping spine** (parity with
+  Claude Code's `/rc`: show what the user is working on right now, not an
+  archive). `mando connect` captures
+  its cwd, passes it to the daemon (`--connect-dir`), the daemon includes it
+  in the hello frame (optional field — old hubs strip it, no protocol
+  bump), the hub persists it (`machines.connect_directory`, migration 004)
+  and exposes it on `GET /api/v1/machines`; the web scopes the session list
+  to it (`GET /session?directory=`) and pins the newest session as LIVE.
+  The web-side `Machine` type in `apps/web/src/lib/hub-client.ts` mirrors
+  `serializeMachine()` by hand — keep them in sync.
 
 ## Adding a new tunnel frame type
 
