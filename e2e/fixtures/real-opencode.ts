@@ -8,17 +8,13 @@
 // for talking to it directly (simulating the "terminal" client that starts
 // a session before the phone connects).
 //
-// The "terminal" session is created via a real `opencode run <message>`
-// (verified against a live opencode 1.17.13), not `POST /api/session` --
-// that's the entire point of this harness: `/api/*`-created sessions have
-// always been visible to Mando, but a plain-TUI/`run` session (writing the
-// `message` store the UNPREFIXED family serves) is the actual production
-// bug this suite guards against. `opencode run` writes its session to the
-// same on-disk project store `opencode serve` reads from when both share a
-// directory -- there is no in-memory state tied to the specific server
-// process -- so running it with `cwd` set to the same directory the serve
-// process was started in is what makes the session discoverable via that
-// server's `GET /session?directory=<dir>` afterward.
+// The "terminal" session is created in the TERMINAL-VISIBLE store (the one
+// the UNPREFIXED API family serves -- where plain-TUI/`opencode run`
+// sessions live), not via `POST /api/session`: `/api/*`-created sessions
+// have always been visible to Mando, but a terminal-store session going
+// invisible is the actual production bug this suite guards against. See
+// RealOpencode.createTerminalSession below for how (and why not
+// `opencode run`).
 //
 // Node-safe (node:child_process/node:net/global fetch): this module is
 // imported by global-setup-real.ts, which Playwright runs under Node even
@@ -30,7 +26,7 @@ import { createServer } from "node:net";
 import { mkdirSync, mkdtempSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { waitFor, waitForExit } from "./proc-utils";
+import { killAndWait, waitFor } from "./proc-utils";
 
 // Fixed path the gated global-setup writes its handoff state to and the
 // gated spec reads it back from. Playwright's globalSetup runs in a
@@ -205,8 +201,9 @@ export async function startRealOpencode(): Promise<RealOpencode> {
       `real opencode (${bin}) GET /doc on port ${port}`,
     );
   } catch (error) {
-    proc.kill("SIGTERM");
-    await waitForExit(proc).catch(() => {});
+    // killAndWait (TERM -> bounded wait -> KILL): same rationale as stop()
+    // below -- a SIGTERM-ignoring opencode must not hang the failure path.
+    await killAndWait(proc);
     const base = error instanceof Error ? error.message : String(error);
     const detail = ocOutput.trim()
       ? `\n--- opencode output (tail) ---\n${ocOutput.trim()}`
@@ -220,14 +217,36 @@ export async function startRealOpencode(): Promise<RealOpencode> {
     async createTerminalSession(message: string) {
       // See the RealOpencode doc comment for why this is HTTP + noReply
       // rather than `opencode run`.
+      //
+      // Every request here is bounded and folds opencode's own output tail
+      // into its failure. This runs inside Playwright's globalSetup, which
+      // has NO default timeout -- an unbounded fetch against a wedged serve
+      // hangs the whole CI job until the runner's 6h cap (observed: a run
+      // sat in this function for 18+ minutes before being cancelled by
+      // hand). Bounded requests turn that into a fast, diagnosable failure.
+      const opencodeTail = () =>
+        ocOutput.trim()
+          ? `\n--- opencode output (tail) ---\n${ocOutput.trim()}`
+          : " (opencode produced no output)";
+      const boundedFetch = async (label: string, url: string, init?: RequestInit) => {
+        try {
+          return await fetch(url, { ...init, signal: AbortSignal.timeout(15_000) });
+        } catch (error) {
+          const base = error instanceof Error ? error.message : String(error);
+          throw new Error(`${label} did not answer within 15s: ${base}${opencodeTail()}`);
+        }
+      };
+
       const directoryParam = encodeURIComponent(cwd);
-      const createRes = await fetch(`http://127.0.0.1:${port}/session?directory=${directoryParam}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: "{}",
-      });
+      const createRes = await boundedFetch(
+        "real opencode POST /session?directory=",
+        `http://127.0.0.1:${port}/session?directory=${directoryParam}`,
+        { method: "POST", headers: { "content-type": "application/json" }, body: "{}" },
+      );
       if (!createRes.ok) {
-        throw new Error(`real opencode POST /session?directory= failed with status ${createRes.status}`);
+        throw new Error(
+          `real opencode POST /session?directory= failed with status ${createRes.status}${opencodeTail()}`,
+        );
       }
       const created = (await createRes.json()) as { id?: string; directory?: string };
       if (!created.id) throw new Error("real opencode POST /session returned no session id");
@@ -238,21 +257,28 @@ export async function startRealOpencode(): Promise<RealOpencode> {
         );
       }
 
-      const messageRes = await fetch(`http://127.0.0.1:${port}/session/${created.id}/message`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ noReply: true, parts: [{ type: "text", text: message }] }),
-      });
+      const messageRes = await boundedFetch(
+        "real opencode POST /session/:id/message (noReply)",
+        `http://127.0.0.1:${port}/session/${created.id}/message`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ noReply: true, parts: [{ type: "text", text: message }] }),
+        },
+      );
       if (!messageRes.ok) {
         throw new Error(
-          `real opencode POST /session/:id/message (noReply) failed with status ${messageRes.status}`,
+          `real opencode POST /session/:id/message (noReply) failed with status ${messageRes.status}${opencodeTail()}`,
         );
       }
 
       // Read-back guard: the message must be servable through the same
       // unprefixed endpoint the web uses -- this is the exact production
       // bug the suite exists to catch (session visible, messages empty).
-      const readBack = await fetch(`http://127.0.0.1:${port}/session/${created.id}/message`);
+      const readBack = await boundedFetch(
+        "real opencode GET /session/:id/message",
+        `http://127.0.0.1:${port}/session/${created.id}/message`,
+      );
       const entries = (await readBack.json()) as OpencodeMessageEntry[];
       if (!entries.some((entry) => opencodeMessageText(entry).includes(message))) {
         throw new Error("terminal message did not read back through GET /session/:id/message");
@@ -261,8 +287,9 @@ export async function startRealOpencode(): Promise<RealOpencode> {
       return created.id;
     },
     async stop() {
-      proc.kill("SIGTERM");
-      await waitForExit(proc).catch(() => {});
+      // killAndWait, not SIGTERM+waitForExit: a CI opencode ignored SIGTERM
+      // and hung the teardown for 20+ minutes after all tests had passed.
+      await killAndWait(proc);
     },
   };
 }
