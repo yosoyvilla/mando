@@ -295,6 +295,77 @@ describe("connect (pairing flow)", () => {
     expect(config?.lastConnect).toEqual({ opencodePort: 9999, connectDirectory: "/previous/dir" });
   });
 
+  it("forwards a freshly generated password from ensureOpencodeServer to spawnDaemon and persists it in lastConnect", async () => {
+    const { writeConfig } = await import("../../src/config");
+    writeConfig({ hubUrl: "http://existing.invalid", token: "already-have-one", machineName: "known-machine" });
+
+    const spawnCalls: Array<[number, string, string | undefined]> = [];
+    const result = await connect({
+      opencodeAuto: true,
+      detectOpencodePort: async () => null,
+      ensureOpencodeServer: async () => ({ port: 5050, password: "a".repeat(32) }),
+      spawnDaemon: (port, dir, password) => {
+        spawnCalls.push([port, dir, password]);
+        return process.pid;
+      },
+    });
+
+    expect(result.status).toBe("connected");
+    expect(spawnCalls).toEqual([[5050, process.cwd(), "a".repeat(32)]]);
+
+    const config = readConfig();
+    expect(config?.lastConnect).toEqual({ opencodePort: 5050, connectDirectory: process.cwd(), opencodePassword: "a".repeat(32) });
+  });
+
+  it("reuses a previously persisted opencode password when ensureOpencodeServer detects the same port without returning a fresh one", async () => {
+    const { writeConfig } = await import("../../src/config");
+    writeConfig({
+      hubUrl: "http://existing.invalid",
+      token: "already-have-one",
+      machineName: "known-machine",
+      lastConnect: { opencodePort: 5050, connectDirectory: "/old/dir", opencodePassword: "b".repeat(32) },
+    });
+
+    const spawnCalls: Array<[number, string, string | undefined]> = [];
+    const result = await connect({
+      opencodeAuto: true,
+      detectOpencodePort: async () => null,
+      // Simulates a reconnect: the auto-started server from a previous
+      // session is still up on the same port, so this call only detects
+      // it -- it never spawned it, so no fresh password comes back.
+      ensureOpencodeServer: async () => ({ port: 5050 }),
+      spawnDaemon: (port, dir, password) => {
+        spawnCalls.push([port, dir, password]);
+        return process.pid;
+      },
+    });
+
+    expect(result.status).toBe("connected");
+    expect(spawnCalls).toEqual([[5050, process.cwd(), "b".repeat(32)]]);
+  });
+
+  it("never forwards a password to spawnDaemon for an explicit --opencode-port (user-started servers unaffected)", async () => {
+    const { writeConfig } = await import("../../src/config");
+    writeConfig({
+      hubUrl: "http://existing.invalid",
+      token: "already-have-one",
+      machineName: "known-machine",
+      lastConnect: { opencodePort: 4097, connectDirectory: "/old/dir", opencodePassword: "c".repeat(32) },
+    });
+
+    const spawnCalls: Array<[number, string, string | undefined]> = [];
+    const result = await connect({
+      opencodePort: 4097,
+      spawnDaemon: (port, dir, password) => {
+        spawnCalls.push([port, dir, password]);
+        return process.pid;
+      },
+    });
+
+    expect(result.status).toBe("connected");
+    expect(spawnCalls).toEqual([[4097, process.cwd(), undefined]]);
+  });
+
   it("returns an error when no hub URL can be resolved", async () => {
     const result = await connect({});
     expect(result.status).toBe("error");

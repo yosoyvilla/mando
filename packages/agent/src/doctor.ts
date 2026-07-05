@@ -1,9 +1,10 @@
 import { existsSync } from "node:fs";
 import { basename, join } from "node:path";
-import { readConfig } from "./config";
+import { readConfig, storedOpencodePassword } from "./config";
 import { defaultExec, type ExecRunner } from "./autostart";
 import { getOpencodeConfigDir } from "./install-command";
 import { detectOpencodePort as defaultDetectOpencodePort } from "./opencode";
+import { basicAuthHeader } from "./forward";
 import { defaultPidFilePath, isProcessAlive as defaultIsProcessAlive, readPidFile } from "./daemon";
 
 // How long the hub reachability check waits for GET /healthz before giving
@@ -12,6 +13,11 @@ import { defaultPidFilePath, isProcessAlive as defaultIsProcessAlive, readPidFil
 // hop the diagnostic is specifically trying to characterize, so it gets a
 // more generous budget than a same-host TCP probe.
 const DEFAULT_HUB_HEALTH_TIMEOUT_MS = 5000;
+
+// How long the opencode-server auth check waits for its authenticated GET
+// /doc before giving up -- a same-host request, so this gets a much
+// tighter budget than the hub's own (remote) health check above.
+const DEFAULT_OPENCODE_AUTH_TIMEOUT_MS = 3000;
 
 // A narrower shape than `typeof fetch` (which, per Bun's lib types, also
 // requires a static `preconnect` method) -- real `fetch` satisfies this
@@ -104,7 +110,18 @@ export async function runDoctor(opts: DoctorOpts = {}): Promise<DoctorReport> {
 
   const opencodePort = await detectOpencodePort();
   if (opencodePort) {
-    checks.push({ name: "opencode-server", status: "pass", detail: `reachable on port ${opencodePort}` });
+    // A password on disk only counts when it was recorded for THIS exact
+    // port (see config.ts's storedOpencodePassword) -- a plain reachable
+    // detection is otherwise all this check can say, same as before
+    // password protection existed, since detectOpencodePort's own probe
+    // (checkHealth) never sends credentials and treats any HTTP response,
+    // 401 included, as "healthy".
+    const password = storedOpencodePassword(config, opencodePort);
+    checks.push(
+      password
+        ? await checkOpencodeAuth(fetchFn, opencodePort, password)
+        : { name: "opencode-server", status: "pass", detail: `reachable on port ${opencodePort}` },
+    );
   } else {
     checks.push({
       name: "opencode-server",
@@ -129,6 +146,29 @@ async function checkHubReachable(fetchFn: FetchLike, hubUrl: string, timeoutMs: 
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     return { name: "hub", status: "fail", detail: `could not reach ${hubUrl}: ${detail}` };
+  }
+}
+
+// checkOpencodeAuth verifies a stored password (see storedOpencodePassword)
+// actually authenticates against the auto-started server it was recorded
+// for -- catching a stale/wrong password (e.g. the server was restarted
+// out-of-band with a different one) that a plain reachability check alone
+// would never surface, since checkHealth treats a 401 as "healthy" too.
+// The password itself never appears in the returned detail string, per the
+// never-log/never-print-the-password rule.
+async function checkOpencodeAuth(fetchFn: FetchLike, port: number, password: string): Promise<DoctorCheck> {
+  try {
+    const res = await fetchFn(`http://127.0.0.1:${port}/doc`, {
+      headers: { Authorization: basicAuthHeader(password) },
+      signal: AbortSignal.timeout(DEFAULT_OPENCODE_AUTH_TIMEOUT_MS),
+    });
+    await res.body?.cancel().catch(() => {});
+    return res.ok
+      ? { name: "opencode-server", status: "pass", detail: `reachable on port ${port} (authenticated)` }
+      : { name: "opencode-server", status: "fail", detail: `reachable on port ${port} but the stored password was rejected (status ${res.status})` };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return { name: "opencode-server", status: "fail", detail: `reachable on port ${port} but the authenticated check failed: ${detail}` };
   }
 }
 

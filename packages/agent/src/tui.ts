@@ -1,5 +1,9 @@
-import { readConfig } from "./config";
-import { checkHealth as defaultCheckHealth, ensureOpencodeServer as defaultEnsureOpencodeServer } from "./opencode";
+import { readConfig, storedOpencodePassword } from "./config";
+import {
+  checkHealth as defaultCheckHealth,
+  ensureOpencodeServer as defaultEnsureOpencodeServer,
+  type EnsuredOpencodeServer,
+} from "./opencode";
 import { defaultSpawnDaemon } from "./connect";
 import { defaultPidFilePath, isProcessAlive as defaultIsProcessAlive, readPidFile } from "./daemon";
 
@@ -20,10 +24,10 @@ export interface TuiOpts {
   // none of these change runTui()'s documented behavior, they only let
   // tests swap the real network/process calls for deterministic stand-ins.
   checkHealth?: (port: number) => Promise<boolean>;
-  ensureOpencodeServer?: (directory: string) => Promise<number>;
-  spawnDaemon?: (opencodePort: number, connectDirectory: string) => number;
+  ensureOpencodeServer?: (directory: string) => Promise<EnsuredOpencodeServer>;
+  spawnDaemon?: (opencodePort: number, connectDirectory: string, opencodePassword?: string) => number;
   isProcessAlive?: (pid: number) => boolean;
-  spawn?: (args: string[]) => SpawnedProcess;
+  spawn?: (args: string[], env?: Record<string, string>) => SpawnedProcess;
 }
 
 // runTui implements `mando tui`: ensure a local opencode server, ensure the
@@ -39,14 +43,23 @@ export async function runTui(opts: TuiOpts = {}): Promise<number> {
   const spawn = opts.spawn ?? defaultSpawnAttach;
 
   const dir = opts.dir ?? process.cwd();
+  // Read once up front -- reused below both for the password fallback and
+  // the existing token/daemon check, mirroring connect.ts's single
+  // `readConfig()` at the top of connect().
+  const config = readConfig();
 
   // An explicit port (flag or env) is a promise from the caller that a
   // server is already there -- verify it and fail clearly rather than
   // silently falling back to detecting/starting a different one, which
-  // would attach to a server the caller didn't ask for.
+  // would attach to a server the caller didn't ask for. No password
+  // resolution here: an explicit port bypasses ensureOpencodeServer
+  // entirely, so this is always treated as a possibly-unprotected,
+  // user-started server -- matching connect()'s own explicit --opencode-
+  // port path.
   const explicitPort = opts.opencodePort ?? (process.env.MANDO_OPENCODE_PORT ? Number(process.env.MANDO_OPENCODE_PORT) : undefined);
 
   let opencodePort: number;
+  let opencodePassword: string | undefined;
   if (explicitPort !== undefined) {
     if (!(await checkHealth(explicitPort))) {
       console.error(`mando tui: no opencode server answering on port ${explicitPort}`);
@@ -55,7 +68,14 @@ export async function runTui(opts: TuiOpts = {}): Promise<number> {
     opencodePort = explicitPort;
   } else {
     try {
-      opencodePort = await ensureOpencodeServer(dir);
+      const ensured = await ensureOpencodeServer(dir);
+      opencodePort = ensured.port;
+      // See connect.ts's identical fallback: ensureOpencodeServer only
+      // returns a password when it spawned the server itself this call;
+      // when it instead reused an already-running auto-started server,
+      // recover the password `mando connect` (or a previous `mando tui`)
+      // already persisted for that exact port.
+      opencodePassword = ensured.password ?? storedOpencodePassword(config, opencodePort);
     } catch (error) {
       console.error(`mando tui: ${error instanceof Error ? error.message : String(error)}`);
       return 1;
@@ -68,19 +88,28 @@ export async function runTui(opts: TuiOpts = {}): Promise<number> {
   // a one-line hint instead, since there is nothing to spawn the daemon
   // for (defaultSpawnDaemon's re-exec would hit daemon.ts's own "no token
   // configured" guard and exit 1 anyway).
-  const config = readConfig();
   if (config?.token) {
     const pid = readPidFile(defaultPidFilePath());
     const daemonAlive = pid !== null && isProcessAlive(pid);
     if (!daemonAlive) {
-      spawnDaemon(opencodePort, dir);
+      spawnDaemon(opencodePort, dir, opencodePassword);
     }
   } else {
     console.error("mando tui: not paired with a hub; run `mando connect --hub <url>` to enable remote control");
   }
 
   const bin = process.env.MANDO_OPENCODE_BIN ?? "opencode";
-  const proc = spawn([bin, "attach", `http://127.0.0.1:${opencodePort}`, "--dir", dir]);
+  // `opencode attach`'s own documented env var for this is
+  // OPENCODE_SERVER_PASSWORD (distinct from daemon.ts's
+  // MANDO_OPENCODE_PASSWORD, which is this agent's own forwarding-auth
+  // variable) -- passed as a spawn-time env override, not mutated into
+  // this process's `process.env` or added to argv, for the same
+  // never-visible-via-ps/never-leaks-elsewhere reason as
+  // connect.ts's defaultSpawnDaemon.
+  const proc = spawn(
+    [bin, "attach", `http://127.0.0.1:${opencodePort}`, "--dir", dir],
+    opencodePassword ? { OPENCODE_SERVER_PASSWORD: opencodePassword } : undefined,
+  );
 
   // mando shares the attached child's foreground process group, so a
   // Ctrl+C in the terminal delivers SIGINT to both processes at once.
@@ -98,15 +127,16 @@ export async function runTui(opts: TuiOpts = {}): Promise<number> {
   }
 }
 
-function defaultSpawnAttach(args: string[]): SpawnedProcess {
+function defaultSpawnAttach(args: string[], env?: Record<string, string>): SpawnedProcess {
   const proc = Bun.spawn(args, {
     stdio: ["inherit", "inherit", "inherit"],
     // Bun.spawn's `env` defaults to a snapshot of process.env taken when
     // *this* bun process launched, not the live process.env at call time
     // (same caveat as connect.ts's defaultSpawnDaemon) -- spread explicitly
-    // so the attached opencode process sees any runtime overrides (e.g.
-    // MANDO_OPENCODE_PASSWORD) set after this process started.
-    env: { ...process.env },
+    // so the attached opencode process sees any runtime overrides set
+    // after this process started, plus `env` (e.g. OPENCODE_SERVER_
+    // PASSWORD) layered on top when the caller resolved one.
+    env: { ...process.env, ...env },
   });
   return { pid: proc.pid, exited: proc.exited };
 }

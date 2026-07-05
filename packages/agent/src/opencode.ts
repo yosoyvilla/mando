@@ -1,4 +1,5 @@
 import { createServer } from "node:net";
+import { randomBytes } from "node:crypto";
 
 // Ports opencode's local HTTP server has been observed to listen on when
 // no explicit override is configured. 4096 is opencode's documented
@@ -82,6 +83,18 @@ function reserveFreePort(): Promise<number> {
   });
 }
 
+// Result of ensureOpencodeServer. `password` is set ONLY when this call
+// itself spawned a brand-new `opencode serve` -- never for a server this
+// call merely detected already running (whether started by hand by the
+// user, or auto-started earlier by a different process). A caller that
+// gets back no password but still needs one to authenticate against a
+// detected server must look it up itself (see config.ts's
+// storedOpencodePassword, matched against the returned `port`).
+export interface EnsuredOpencodeServer {
+  port: number;
+  password?: string;
+}
+
 // ensureOpencodeServer finds or starts a local opencode server for
 // `directory`, returning the port it can be reached on. This is what
 // `mando connect --opencode-auto` (see connect.ts) falls back to when
@@ -97,12 +110,21 @@ function reserveFreePort(): Promise<number> {
 // call -- connect() returns and exits shortly after, but the daemon it
 // spawns right after this needs the opencode server to keep serving for
 // the rest of the session.
-export async function ensureOpencodeServer(directory: string): Promise<number> {
+//
+// A server THIS call spawns is password-protected: a fresh 32-hex-char
+// password (16 random bytes) is generated and handed to the child via
+// OPENCODE_SERVER_PASSWORD, opencode's own documented env var for this
+// (mirrors the `-p`/`--password` flag `opencode attach` accepts). A
+// user-started server that ensureOpencodeServer only detects is left
+// exactly as it was -- this function never touches or requires auth for
+// a server it didn't start itself.
+export async function ensureOpencodeServer(directory: string): Promise<EnsuredOpencodeServer> {
   const existing = await detectOpencodePort();
-  if (existing) return existing;
+  if (existing) return { port: existing };
 
   const port = await reserveFreePort();
   const bin = process.env.MANDO_OPENCODE_BIN ?? "opencode";
+  const password = randomBytes(16).toString("hex");
 
   let proc: ReturnType<typeof Bun.spawn>;
   try {
@@ -110,7 +132,7 @@ export async function ensureOpencodeServer(directory: string): Promise<number> {
       cwd: directory,
       stdio: ["ignore", "ignore", "ignore"],
       detached: true,
-      env: { ...process.env },
+      env: { ...process.env, OPENCODE_SERVER_PASSWORD: password },
     });
   } catch (error) {
     // Bun.spawn resolves the binary from PATH itself before forking, so a
@@ -126,7 +148,7 @@ export async function ensureOpencodeServer(directory: string): Promise<number> {
 
   const deadline = Date.now() + ENSURE_SERVER_DEADLINE_MS;
   while (Date.now() < deadline) {
-    if (await checkHealth(port)) return port;
+    if (await checkHealth(port)) return { port, password };
     await new Promise((resolve) => setTimeout(resolve, ENSURE_SERVER_POLL_INTERVAL_MS));
   }
 

@@ -146,6 +146,98 @@ describe("runDoctor", () => {
     expect(findCheck(report.checks, "opencode-server").status).toBe("fail");
   });
 
+  it("passes the opencode-server check with a plain reachability detail when no password is stored for the detected port", async () => {
+    writeConfig({ hubUrl: "http://hub.invalid", token: "tok", machineName: "m" });
+
+    const report = await runDoctor({
+      fetchFn: async () => new Response("ok", { status: 200 }),
+      exec: passingExec,
+      detectOpencodePort: async () => 4096,
+      isProcessAlive: () => true,
+    });
+
+    const server = findCheck(report.checks, "opencode-server");
+    expect(server.status).toBe("pass");
+    expect(server.detail).toBe("reachable on port 4096");
+  });
+
+  it("verifies the stored password against an authenticated request when lastConnect recorded one for the detected port", async () => {
+    writeConfig({
+      hubUrl: "http://hub.invalid",
+      token: "tok",
+      machineName: "m",
+      lastConnect: { opencodePort: 4096, connectDirectory: "/some/dir", opencodePassword: "secret-pw" },
+    });
+
+    const captured: { auth: string | null } = { auth: null };
+    const report = await runDoctor({
+      fetchFn: async (_url, init) => {
+        captured.auth = (init?.headers as Record<string, string> | undefined)?.["Authorization"] ?? null;
+        return new Response("ok", { status: 200 });
+      },
+      exec: passingExec,
+      detectOpencodePort: async () => 4096,
+      isProcessAlive: () => true,
+    });
+
+    const server = findCheck(report.checks, "opencode-server");
+    expect(server.status).toBe("pass");
+    expect(server.detail).toContain("authenticated");
+    // Never printed/logged verbatim -- only proven to have been sent.
+    expect(server.detail).not.toContain("secret-pw");
+    expect(captured.auth).toBe(`Basic ${Buffer.from("opencode:secret-pw").toString("base64")}`);
+  });
+
+  it("fails the opencode-server check when the stored password is rejected by the server", async () => {
+    writeConfig({
+      hubUrl: "http://hub.invalid",
+      token: "tok",
+      machineName: "m",
+      lastConnect: { opencodePort: 4096, connectDirectory: "/some/dir", opencodePassword: "wrong-pw" },
+    });
+
+    const report = await runDoctor({
+      fetchFn: async () => new Response("unauthorized", { status: 401 }),
+      exec: passingExec,
+      detectOpencodePort: async () => 4096,
+      isProcessAlive: () => true,
+    });
+
+    const server = findCheck(report.checks, "opencode-server");
+    expect(server.status).toBe("fail");
+    expect(server.detail).toContain("401");
+    expect(server.detail).not.toContain("wrong-pw");
+  });
+
+  it("ignores a stored password recorded for a different port than the one currently detected", async () => {
+    writeConfig({
+      hubUrl: "http://hub.invalid",
+      token: "tok",
+      machineName: "m",
+      lastConnect: { opencodePort: 4097, connectDirectory: "/some/dir", opencodePassword: "stale-pw" },
+    });
+
+    let fetchCalls = 0;
+    const report = await runDoctor({
+      fetchFn: async () => {
+        fetchCalls++;
+        return new Response("ok", { status: 200 });
+      },
+      exec: passingExec,
+      detectOpencodePort: async () => 4096, // different port than lastConnect recorded
+      isProcessAlive: () => true,
+    });
+
+    // Exactly one fetch -- the hub check. The opencode-server check must
+    // skip its authenticated request entirely when the stored password's
+    // port doesn't match the one currently detected (see the plain
+    // "reachable" detail below, with no mention of authentication).
+    expect(fetchCalls).toBe(1);
+    const server = findCheck(report.checks, "opencode-server");
+    expect(server.status).toBe("pass");
+    expect(server.detail).toBe("reachable on port 4096");
+  });
+
   it("fails the opencode-binary check when the exec runner reports a non-zero exit (binary missing)", async () => {
     const report = await runDoctor({
       exec: () => ({ status: 1, stdout: "", stderr: "command not found" }),

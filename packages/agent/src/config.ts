@@ -10,9 +10,20 @@ import { z } from "zod";
 // to inherit either from. opencodePort is optional because the
 // already-running-daemon short-circuit in connect() returns before
 // re-resolving it; connectDirectory is always known (it's just cwd).
+// opencodePassword is only ever set here when the opencode server running
+// on opencodePort was auto-started by ensureOpencodeServer (see
+// opencode.ts) -- a user-started server never has one. Storing it
+// alongside the port it belongs to (rather than as its own top-level
+// field) is what lets storedOpencodePassword() below tell "this password
+// is for the server currently running" apart from "this password is a
+// stale leftover from a since-replaced auto-started server" -- an
+// auto-started server gets a fresh random password every time it's
+// spawned, so a password on disk is only trustworthy when its port still
+// matches the one currently detected.
 const lastConnectSchema = z.object({
   opencodePort: z.number().optional(),
   connectDirectory: z.string(),
+  opencodePassword: z.string().optional(),
 });
 
 const agentConfigSchema = z.object({
@@ -25,6 +36,7 @@ const agentConfigSchema = z.object({
 export interface LastConnect {
   opencodePort?: number;
   connectDirectory: string;
+  opencodePassword?: string;
 }
 
 export interface AgentConfig {
@@ -68,6 +80,16 @@ export function readConfig(): AgentConfig | null {
   }
 
   return result.data;
+}
+
+// storedOpencodePassword answers "is there a password on disk for the
+// opencode server currently running on `port`" -- true only when
+// config.lastConnect recorded that exact port alongside a password (see
+// the lastConnectSchema comment above for why the port match matters).
+// Shared by connect.ts, tui.ts and doctor.ts so all three agree on the
+// same trust rule for reusing a previously auto-generated password.
+export function storedOpencodePassword(config: AgentConfig | null, port: number): string | undefined {
+  return config?.lastConnect?.opencodePort === port ? config.lastConnect.opencodePassword : undefined;
 }
 
 export function writeConfig(config: AgentConfig): void {

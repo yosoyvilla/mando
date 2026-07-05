@@ -116,6 +116,9 @@ beforeAll(() => {
       "      setTimeout(() => process.exit(0), 10);",
       '      return new Response("ok");',
       "    }",
+      '    if (new URL(req.url).pathname === "/__test_password__") {',
+      '      return new Response(process.env.OPENCODE_SERVER_PASSWORD ?? "", { status: 200 });',
+      "    }",
       '    return new Response("{}", { status: 200 });',
       "  },",
       "});",
@@ -148,20 +151,30 @@ describe("ensureOpencodeServer", () => {
     // short-circuited before the spawn path ever ran.
     process.env.MANDO_OPENCODE_BIN = "/nonexistent/mando-test-opencode-bin";
 
-    expect(await ensureOpencodeServer(process.cwd())).toBe(port);
+    // A pre-existing (user-started) server never gets a password -- only
+    // the port comes back, matching "user-started serves unaffected".
+    expect(await ensureOpencodeServer(process.cwd())).toEqual({ port });
   });
 
-  it("spawns the opencode binary and returns a port that answers /doc when none is detected", async () => {
+  it("spawns the opencode binary with a generated password, and returns a port that answers /doc, when none is detected", async () => {
     if (!(await candidatePortsAreFree())) return;
 
     process.env.MANDO_OPENCODE_PORT = "1"; // reserved port, guaranteed closed -- forces detection past the override
     process.env.MANDO_OPENCODE_BIN = shimPath;
 
-    const port = await ensureOpencodeServer(shimDir);
+    const ensured = await ensureOpencodeServer(shimDir);
     try {
-      expect(await checkHealth(port)).toBe(true);
+      expect(await checkHealth(ensured.port)).toBe(true);
+      // 32 hex chars -- 16 random bytes, per opencode.ts's generation.
+      expect(ensured.password).toMatch(/^[0-9a-f]{32}$/);
+
+      // Proves the password was actually handed to the spawned process via
+      // OPENCODE_SERVER_PASSWORD (opencode's own documented env var for
+      // this), not merely generated and discarded.
+      const received = await (await fetch(`http://127.0.0.1:${ensured.port}/__test_password__`)).text();
+      expect(received).toBe(ensured.password!);
     } finally {
-      await fetch(`http://127.0.0.1:${port}/__test_shutdown__`).catch(() => {});
+      await fetch(`http://127.0.0.1:${ensured.port}/__test_shutdown__`).catch(() => {});
     }
   }, 10_000);
 
