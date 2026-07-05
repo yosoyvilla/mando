@@ -23,6 +23,7 @@ import {
   sortSessions,
 } from "@/hooks/use-opencode";
 import { opencodeEvents } from "@/lib/opencode-fetch";
+import { notifyIfBackgrounded } from "@/lib/notify";
 
 // The installed `@opencode-ai/sdk`'s `Event` union already types this
 // payload field as `properties` -- confirmed against a live opencode
@@ -381,6 +382,9 @@ function applyEvent(
         [event.properties.sessionID]: { type: "idle" },
       }));
       revalidateMessagesNow(machineId, event.properties.sessionID);
+      notifyIfBackgrounded("Run finished", {
+        tag: `mando-session-idle-${event.properties.sessionID}`,
+      });
       break;
 
     case "session.next.agent.switched":
@@ -878,6 +882,9 @@ function applyEvent(
       mutatePermissions(machineId, connectDirectory, (items) =>
         upsertById(items, event.properties),
       );
+      notifyIfBackgrounded("Approval needed", {
+        tag: `mando-permission-asked-${event.properties.id}`,
+      });
       break;
 
     case "permission.replied":

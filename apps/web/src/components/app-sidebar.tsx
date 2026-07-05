@@ -12,6 +12,7 @@ import { useEffect, useState, useMemo } from "react";
 import { parsePatchFiles } from "@pierre/diffs";
 import { Avatar } from "@/components/ui/avatar";
 import { StatusDot } from "@/components/status-dot";
+import { NotifyToggle } from "@/components/notify-toggle";
 import { SidebarSessionList } from "@/components/sidebar-session-list";
 import { ThemeSwitcher } from "@/components/theme-switcher";
 import {
@@ -335,7 +336,10 @@ export default function AppSidebar(
             </MenuContent>
           </Menu>
         </div>
-        <ThemeSwitcher />
+        <div className="flex items-center gap-1">
+          <NotifyToggle />
+          <ThemeSwitcher />
+        </div>
       </SidebarFooter>
       <SidebarRail />
     </Sidebar>
