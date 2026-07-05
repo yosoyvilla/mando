@@ -20,6 +20,11 @@ const Schema = z.object({
   MANDO_RATE_LIMIT_LOGIN_MAX: z.coerce.number().int().positive().optional(),
   MANDO_RATE_LIMIT_PAIRING_MAX: z.coerce.number().int().positive().optional(),
   MANDO_RATE_LIMIT_WS_AGENT_MAX: z.coerce.number().int().positive().optional(),
+  // Overrides DEFAULT_RATE_LIMITS.images's max -- the images generate/edit
+  // endpoints call the user's own (potentially costly) provider, so this
+  // follows the exact same override pattern as MANDO_RATE_LIMIT_LOGIN_MAX
+  // above rather than introducing a new shape.
+  MANDO_RATE_LIMIT_IMAGES_MAX: z.coerce.number().int().positive().optional(),
   // How often index.ts re-runs retention.ts's runRetention() sweep after its
   // initial startup pass. Defaults to hourly (retention.ts) when unset --
   // this only lets an operator override the cadence, same pattern as the
@@ -65,6 +70,7 @@ export type Config = {
   rateLimitLoginMax?: number;
   rateLimitPairingMax?: number;
   rateLimitWsAgentMax?: number;
+  rateLimitImagesMax?: number;
   retentionIntervalMs?: number;
   encryptionKey?: Buffer;
 };
@@ -81,6 +87,7 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
     rateLimitLoginMax: p.MANDO_RATE_LIMIT_LOGIN_MAX,
     rateLimitPairingMax: p.MANDO_RATE_LIMIT_PAIRING_MAX,
     rateLimitWsAgentMax: p.MANDO_RATE_LIMIT_WS_AGENT_MAX,
+    rateLimitImagesMax: p.MANDO_RATE_LIMIT_IMAGES_MAX,
     retentionIntervalMs: p.MANDO_RETENTION_INTERVAL_MS,
     encryptionKey: p.MANDO_ENCRYPTION_KEY ? decodeEncryptionKey(p.MANDO_ENCRYPTION_KEY) : undefined,
   };

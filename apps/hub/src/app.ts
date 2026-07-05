@@ -9,9 +9,12 @@ import { pairingRoutes } from "./pairing/routes";
 import { machineRoutes } from "./machines/routes";
 import { proxyRoutes } from "./proxy/routes";
 import { providerRoutes } from "./providers/routes";
+import { imageRoutes } from "./images/routes";
+import { IMAGE_MAX_BYTES, type ProviderClientDeps } from "./images/provider-client";
 import { Registry } from "./tunnel/registry";
 import { tunnelWsHandler, websocket } from "./tunnel/ws";
 import { createRateLimiter, DEFAULT_RATE_LIMITS, type RateLimitConfig } from "./middleware/rate-limit";
+import { bodyLimit } from "hono/body-limit";
 import { auditRoutes } from "./audit";
 
 // Where the built web SPA (apps/web) lives. Its build is produced later
@@ -26,6 +29,22 @@ const WEB_DIR =
 function isApiOrWsPath(path: string): boolean {
   return path.startsWith("/api/") || path.startsWith("/ws/");
 }
+
+// Global Bun.serve({ maxRequestBodySize }) cap, applied to every route on
+// this server -- Bun has no per-route body-size option, only a
+// per-instance one, so this can't be set to exactly IMAGE_MAX_BYTES (10MB)
+// without also capping every other route at that size. It has to stay
+// above the largest legitimate non-image request body this hub already
+// accepts: the composer attachments proxy (attachments.ts's
+// MAX_ATTACHMENT_TOTAL_BYTES = 8MB raw, sent browser->hub as base64 data
+// URLs inside JSON, ~4/3 inflation -> up to ~10.7MB). 16MB clears that
+// with headroom while still being a real reduction from Bun's 128MiB
+// default -- the actual, tighter 10MB cap for images specifically is
+// enforced per-route by the `bodyLimit` middleware on /api/v1/images/edits
+// below (and by images/provider-client.ts's IMAGE_MAX_BYTES check on the
+// provider's response), so this global value is a coarse DoS backstop,
+// not the mechanism that bounds image size.
+export const MAX_REQUEST_BODY_BYTES = 16 * 1024 * 1024;
 
 // Re-exported so the real server entry (src/index.ts, task 2.9) and test
 // helpers can pass the same Bun WebSocket handler into Bun.serve({
@@ -59,7 +78,14 @@ export type AppDeps = {
     pairingRequest?: RateLimitConfig;
     pairingStatus?: RateLimitConfig;
     wsAgent?: RateLimitConfig;
+    images?: RateLimitConfig;
   };
+  // Overrides images/provider-client.ts's SSRF guard for the images
+  // routes only -- unset (the production default) uses the real guard.
+  // Tests use this to point generate/edit at a real local fake provider
+  // server, which the real guard correctly always rejects (loopback,
+  // plain http).
+  imagesProviderDeps?: ProviderClientDeps;
 };
 
 // buildApp is the single place both the real server entry (src/index.ts,
@@ -88,12 +114,25 @@ export function buildApp(deps: AppDeps): Hono<{ Variables: AuthVariables }> {
     createRateLimiter(rateLimits.pairingStatus ?? DEFAULT_RATE_LIMITS.pairingStatus),
   );
   app.use("/ws/agent", createRateLimiter(rateLimits.wsAgent ?? DEFAULT_RATE_LIMITS.wsAgent));
+  // Per the plan's Global Constraints ("rate-limit the gen/edit
+  // endpoints"): only the two routes that call out to the user's own
+  // provider are limited -- GET (list/raw) and DELETE are plain,
+  // owner-scoped DB reads/writes with no outbound request to bound.
+  app.use("/api/v1/images/generations", createRateLimiter(rateLimits.images ?? DEFAULT_RATE_LIMITS.images));
+  app.use("/api/v1/images/edits", createRateLimiter(rateLimits.images ?? DEFAULT_RATE_LIMITS.images));
+  // Caps the multipart request body itself at the same size as
+  // IMAGE_MAX_BYTES (the cap already enforced on the provider's response
+  // in images/provider-client.ts) -- otherwise a caller could upload an
+  // arbitrarily large "source" image to /images/edits before this route
+  // ever gets far enough to reject it on other grounds.
+  app.use("/api/v1/images/edits", bodyLimit({ maxSize: IMAGE_MAX_BYTES }));
 
   app.route("/", userRoutes(deps.sql, registry));
   app.route("/", pairingRoutes(deps.sql));
   app.route("/", machineRoutes(deps.sql, registry));
   app.route("/", proxyRoutes(deps.sql, registry));
   app.route("/", providerRoutes(deps.sql, deps.config));
+  app.route("/", imageRoutes(deps.sql, deps.config, deps.imagesProviderDeps));
   app.route("/", auditRoutes(deps.sql));
 
   app.get(

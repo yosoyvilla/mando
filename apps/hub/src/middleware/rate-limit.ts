@@ -20,6 +20,11 @@ export const DEFAULT_RATE_LIMITS = {
   pairingRequest: { windowMs: 60_000, max: 30 },
   pairingStatus: { windowMs: 60_000, max: 30 },
   wsAgent: { windowMs: 60_000, max: 30 },
+  // Guards the images generate/edit endpoints (images/routes.ts): each
+  // request calls out to the user's own provider, so this bounds how much
+  // outbound traffic (and provider spend) one client can drive per window,
+  // same rationale as login's argon2id-verify guard above.
+  images: { windowMs: 60_000, max: 20 },
 } as const satisfies Record<string, RateLimitConfig>;
 
 type Bucket = {

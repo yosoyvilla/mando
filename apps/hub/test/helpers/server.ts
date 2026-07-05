@@ -1,4 +1,4 @@
-import { buildApp, websocket, type AppDeps } from "../../src/app";
+import { buildApp, websocket, MAX_REQUEST_BODY_BYTES, type AppDeps } from "../../src/app";
 
 export type TestServer = {
   url: string;
@@ -13,7 +13,12 @@ export type TestServer = {
 // app.request() alone can't drive a WS upgrade).
 export async function startTestServer(deps: AppDeps): Promise<TestServer> {
   const app = buildApp(deps);
-  const server = Bun.serve({ port: 0, fetch: app.fetch, websocket });
+  const server = Bun.serve({
+    port: 0,
+    fetch: app.fetch,
+    websocket,
+    maxRequestBodySize: MAX_REQUEST_BODY_BYTES,
+  });
 
   return {
     url: `http://localhost:${server.port}`,
