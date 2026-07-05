@@ -324,6 +324,24 @@ Every tagged release also publishes the hub image to `ghcr.io/yosoyvilla/mando-h
 
 If you do not need the hub on the public internet, put it behind a private overlay network (such as a Tailscale-style tailnet) or a VPN and skip public exposure entirely. Machines still reach it the same way; only the network path changes.
 
+### Logs, backups, and uptime monitoring
+
+The Compose file caps both containers' logs at 10MB per file, 3 files (Docker's `json-file` driver, `max-size`/`max-file`) — without this, an unattended hub's logs grow unbounded and can fill the host's disk over time.
+
+Back up the Postgres database with the included script, which dumps and gzips it via `docker compose exec` and keeps the last 14 days:
+
+```bash
+0 3 * * * /opt/mando/backup-postgres.sh
+```
+
+`MANDO_COMPOSE_FILE` and `MANDO_BACKUP_DIR` override the compose file location and backup destination (defaults: `/opt/mando/docker-compose.yml` and `/opt/mando/backups`) if you deploy from somewhere else.
+
+For uptime monitoring, point an external checker — [healthchecks.io](https://healthchecks.io), [UptimeRobot](https://uptimerobot.com), or similar — at `GET /healthz` on your `PUBLIC_URL`; either service pings it on a schedule and alerts you when it stops responding. If you would rather push from the host instead, a cron entry works the same way:
+
+```bash
+*/5 * * * * curl -fsS "$PING_URL" >/dev/null
+```
+
 ## Managing users and machines
 
 - **The first user** is the admin you create with `MANDO_ADMIN_EMAIL` / `MANDO_ADMIN_PASSWORD`.
