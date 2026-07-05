@@ -5,6 +5,7 @@ export * from "./forward";
 export * from "./connect";
 export * from "./daemon";
 export * from "./install-command";
+export * from "./tui";
 export * from "./version";
 
 import { readConfig } from "./config";
@@ -19,6 +20,7 @@ import {
   runDaemonMain,
 } from "./daemon";
 import { installCommand } from "./install-command";
+import { runTui } from "./tui";
 import { VERSION } from "./version";
 
 export type DisconnectResult =
@@ -122,6 +124,9 @@ function parseArgs(argv: string[]): ConnectOpts {
       case "--hub":
         opts.hub = argv[++i];
         break;
+      case "--dir":
+        opts.dir = argv[++i];
+        break;
       default:
         positional.push(arg);
     }
@@ -165,6 +170,10 @@ async function main(): Promise<void> {
       console.log(path);
       return;
     }
+    case "tui": {
+      const code = await runTui({ dir: opts.dir, opencodePort: opts.opencodePort });
+      process.exit(code);
+    }
     // Hidden -- deliberately left out of the usage string below. This is
     // not a user-facing command: defaultSpawnDaemon (see connect.ts)
     // re-executes the current executable as `<execPath> _daemon
@@ -177,7 +186,9 @@ async function main(): Promise<void> {
       return;
     }
     default: {
-      console.error("Usage: mando <connect|disconnect|status|install-command|version> [--json] [--hub <url>] [--opencode-port <port>] [--opencode-auto]");
+      console.error(
+        "Usage: mando <connect|disconnect|status|tui|install-command|version> [--json] [--hub <url>] [--opencode-port <port>] [--opencode-auto] [--dir <path>]",
+      );
       process.exitCode = command ? 1 : 0;
       return;
     }

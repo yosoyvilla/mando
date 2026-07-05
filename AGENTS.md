@@ -21,7 +21,7 @@ exposed to the network.
 |---|---|
 | `apps/hub` | `@mando/hub`. Bun + Hono server: REST/SSE API, the `/ws/agent` WebSocket tunnel endpoint, session auth, pairing, the tunnel registry (in-memory table of live agent connections) and proxy, PostgreSQL data layer (`postgres.js`), migrations (`apps/hub/migrations/`). Serves the built web SPA as static files plus an SPA fallback. `buildApp(deps)` in `src/app.ts` is the single place the Hono app is constructed — both `src/index.ts` and every integration test use it. |
 | `apps/web` | `@mando/web`. Static SPA (React 19 + Vite + TanStack Router), served by the hub in production. Talks to the hub via `HubClient` in `src/lib/hub-client.ts`. |
-| `packages/agent` | `@mando/agent`. The `mando` CLI: `connect` / `disconnect` / `status` / `install-command`, a session-scoped background daemon that holds the tunnel open, and local opencode health/forwarding. Config lives in `~/.mando.json`. Compiles to a standalone binary via `bun build --compile`. |
+| `packages/agent` | `@mando/agent`. The `mando` CLI: `connect` / `disconnect` / `status` / `tui` / `install-command`, a session-scoped background daemon that holds the tunnel open, and local opencode health/forwarding. Config lives in `~/.mando.json`. Compiles to a standalone binary via `bun build --compile`. |
 | `packages/protocol` | `@mando/protocol`. Shared Zod schemas for every tunnel frame (`src/frames.ts`) plus `parseFrame` / `serializeFrame`. The hub and the agent both depend on this — it is the only source of truth for the wire format. |
 | `packages/opencode-plugin` | `@mando/opencode-plugin`. The `/mando` opencode slash-command template (`commands/mando.md`), installed into a user's opencode config by `mando install-command`. |
 | `deploy` | `Dockerfile`, `docker-compose.yml` (hub + `postgres:17`, host port `5433`), and `k8s/` manifests (Deployment pinned to 1 replica, Service, NetworkPolicy, ServiceAccount, example Secret/Ingress). |
@@ -50,6 +50,20 @@ exposed to the network.
   body field is silently ignored), and `POST /session/:id/message` without
   `noReply: true` synchronously attempts an assistant reply (harness code
   must always pass `noReply: true`).
+- **`mando tui` is the mirrored-terminal path.**
+  Opencode's attach mode and its `/tui/*` control endpoints
+  (`append-prompt`, `submit-prompt`, `show-toast`, `select-session`, and the
+  long-poll `GET /tui/control/next`) were also verified live on 1.17.13.
+  `mando tui` (`packages/agent/src/tui.ts`) is the supported way to get a
+  mirrored terminal: it attaches with `opencode attach <url> --dir <dir>`, so
+  a prompt sent through the hub renders in that terminal as it streams and
+  keystrokes typed there stream out to the browser. A plain, non-attached
+  opencode TUI only shares the on-disk session store with the web — no live
+  mirroring. The no-op `SIGINT` handler in `tui.ts` is load-bearing: `mando`
+  shares the attached child's foreground process group, so Ctrl+C delivers
+  `SIGINT` to both at once; without the handler, `mando`'s default behavior
+  would exit it immediately, before it can await and propagate the child's
+  real exit code.
 - **Multi-tenant ownership checks on every machine-scoped route.** Any route
   under `/api/v1/machines/:id/...` must run `requireUser` then
   `requireMachineOwnership` (see `apps/hub/src/auth/middleware.ts`), which
