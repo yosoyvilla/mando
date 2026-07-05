@@ -44,11 +44,17 @@ if (import.meta.main) {
   // Data-minimization sweep (retention.ts): run once at startup, then on a
   // recurring interval. `.unref()` keeps the timer from holding the event
   // loop open, so it never blocks a graceful shutdown the way a normal
-  // setInterval handle would.
-  await runRetention(sql);
+  // setInterval handle would. Also purges generated images (files +
+  // rows) past MANDO_IMAGE_RETENTION_DAYS or MANDO_IMAGE_MAX_PER_USER.
+  const retentionOptions = {
+    imageDir: config.imageDir,
+    imageRetentionDays: config.imageRetentionDays,
+    imageMaxPerUser: config.imageMaxPerUser,
+  };
+  await runRetention(sql, retentionOptions);
   const retentionIntervalMs = config.retentionIntervalMs ?? DEFAULT_RETENTION_INTERVAL_MS;
   const retentionTimer = setInterval(() => {
-    runRetention(sql).catch((err) => console.error("retention: sweep failed", err));
+    runRetention(sql, retentionOptions).catch((err) => console.error("retention: sweep failed", err));
   }, retentionIntervalMs);
   retentionTimer.unref();
 

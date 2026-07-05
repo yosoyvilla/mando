@@ -80,6 +80,31 @@ test("loadConfig decodes a base64 MANDO_ENCRYPTION_KEY into a 32-byte key", () =
   expect(c.encryptionKey?.equals(raw)).toBe(true);
 });
 
+test("loadConfig defaults image storage settings to the dev-local dir, 7-day retention, and 100 images per user", () => {
+  const c = loadConfig({
+    DATABASE_URL: "postgres://u:p@localhost/db",
+    COOKIE_SECRET: "s".repeat(32),
+    PUBLIC_URL: "http://x",
+  });
+  expect(c.imageDir).toBe(".mando-images");
+  expect(c.imageRetentionDays).toBe(7);
+  expect(c.imageMaxPerUser).toBe(100);
+});
+
+test("loadConfig picks up MANDO_IMAGE_DIR/MANDO_IMAGE_RETENTION_DAYS/MANDO_IMAGE_MAX_PER_USER overrides", () => {
+  const c = loadConfig({
+    DATABASE_URL: "postgres://u:p@localhost/db",
+    COOKIE_SECRET: "s".repeat(32),
+    PUBLIC_URL: "http://x",
+    MANDO_IMAGE_DIR: "/data/images",
+    MANDO_IMAGE_RETENTION_DAYS: "14",
+    MANDO_IMAGE_MAX_PER_USER: "250",
+  });
+  expect(c.imageDir).toBe("/data/images");
+  expect(c.imageRetentionDays).toBe(14);
+  expect(c.imageMaxPerUser).toBe(250);
+});
+
 test("loadConfig hard-fails startup when MANDO_ENCRYPTION_KEY does not decode to exactly 32 bytes", () => {
   expect(() =>
     loadConfig({

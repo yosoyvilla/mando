@@ -1,4 +1,7 @@
 import { test, expect, beforeAll } from "bun:test";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { getDb } from "../../src/db/client";
 import { runMigrations } from "../../src/db/migrate";
 import { loadConfig, type Config } from "../../src/config";
@@ -6,7 +9,8 @@ import { buildApp } from "../../src/app";
 import { createUser } from "../../src/users/repo";
 import { upsertProviderSettings } from "../../src/providers/repo";
 import { encryptSecret } from "../../src/crypto/secretbox";
-import { insertImage, getRaw } from "../../src/images/repo";
+import { createImage, getFileRef, retainImages } from "../../src/images/repo";
+import { readImageFile } from "../../src/images/storage";
 import { generateImage, editImage, ProviderImageError } from "../../src/images/provider-client";
 
 const url = process.env.TEST_DATABASE_URL ?? "postgres://mando:mando@localhost:5433/mando";
@@ -14,21 +18,32 @@ const sql = getDb(url);
 
 const ENCRYPTION_KEY_HEX = "cd".repeat(32);
 
-const config: Config = loadConfig({
-  DATABASE_URL: url,
-  COOKIE_SECRET: "test-secret-that-is-at-least-32-characters",
-  PUBLIC_URL: "http://localhost:8080",
-  MANDO_ENCRYPTION_KEY: ENCRYPTION_KEY_HEX,
-});
+// Every test in this file uses its own temp directory for MANDO_IMAGE_DIR
+// (never the dev-default `.mando-images`) so runs don't leave files behind
+// in the repo or collide with each other across test files.
+async function freshImageDir(): Promise<string> {
+  return mkdtemp(join(tmpdir(), "mando-images-test-"));
+}
 
-const disabledConfig: Config = loadConfig({
-  DATABASE_URL: url,
-  COOKIE_SECRET: "test-secret-that-is-at-least-32-characters",
-  PUBLIC_URL: "http://localhost:8080",
-});
+let config: Config;
+let disabledConfig: Config;
 
 beforeAll(async () => {
   await runMigrations(sql);
+  const imageDir = await freshImageDir();
+  config = loadConfig({
+    DATABASE_URL: url,
+    COOKIE_SECRET: "test-secret-that-is-at-least-32-characters",
+    PUBLIC_URL: "http://localhost:8080",
+    MANDO_ENCRYPTION_KEY: ENCRYPTION_KEY_HEX,
+    MANDO_IMAGE_DIR: imageDir,
+  });
+  disabledConfig = loadConfig({
+    DATABASE_URL: url,
+    COOKIE_SECRET: "test-secret-that-is-at-least-32-characters",
+    PUBLIC_URL: "http://localhost:8080",
+    MANDO_IMAGE_DIR: imageDir,
+  });
 });
 
 function uniqueEmail(tag: string): string {
@@ -75,6 +90,14 @@ function b64Png1x1(): string {
   return "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
 }
 
+// A JPEG magic-number prefix (FF D8 FF) -- used to prove the mime-sniff
+// fix: a provider that returns JPEG bytes for a request we labeled/expect
+// as PNG must be stored and served back as image/jpeg, not image/png (the
+// "flux returns JPEG even when we labeled png" debt from the plan).
+function jpegBytesMislabeledAsPng(): Buffer {
+  return Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]);
+}
+
 type FakeServer = { baseUrl: string; stop(): void; requests: Request[] };
 
 function startFakeProviderServer(handler: (req: Request) => Promise<Response> | Response): FakeServer {
@@ -115,6 +138,22 @@ test("generateImage sends model/prompt/Bearer auth and decodes the returned b64_
     expect(result.mime).toBe("image/png");
     expect(result.bytes.length).toBeGreaterThan(0);
     expect(result.bytes.equals(Buffer.from(b64Png1x1(), "base64"))).toBe(true);
+  } finally {
+    fake.stop();
+  }
+});
+
+test("generateImage sniffs the real mime from magic bytes rather than trusting a hardcoded png assumption", async () => {
+  const fake = startFakeProviderServer(() =>
+    Response.json({ data: [{ b64_json: jpegBytesMislabeledAsPng().toString("base64") }] }),
+  );
+
+  try {
+    const result = await generateImage(
+      { baseUrl: fake.baseUrl, apiKey: "sk-fake-key", model: "test-model", prompt: "x" },
+      { assertSafeUrl: noopGuard },
+    );
+    expect(result.mime).toBe("image/jpeg");
   } finally {
     fake.stop();
   }
@@ -204,39 +243,95 @@ test("editImage sends the source image + prompt as multipart and decodes the res
   }
 });
 
-// --- images/repo: retention + owner scoping ---
+// --- images/repo: disk storage, owner scoping, retention ---
 
-test("insertImage's retention keeps only the newest 50 rows per user", async () => {
-  const user = await createUser(sql, uniqueEmail("retention"), "correct-password");
-  const bytes = Buffer.from("x");
+test("createImage writes the file to disk under the returned id and stores its size", async () => {
+  const user = await createUser(sql, uniqueEmail("create"), "correct-password");
+  const bytes = Buffer.from("some png-ish bytes");
 
-  for (let i = 0; i < 55; i++) {
-    await insertImage(sql, user.id, { prompt: `p${i}`, mime: "image/png", bytes, sourceKind: "generation" });
-  }
+  const image = await createImage(sql, config.imageDir, user.id, {
+    prompt: "a test image",
+    mime: "image/png",
+    bytes,
+    sourceKind: "generation",
+  });
 
-  const rows = await sql`select count(*)::int as count from generated_images where user_id = ${user.id}`;
-  expect(rows[0]!.count).toBe(50);
-
-  const newest = await sql`
-    select prompt from generated_images where user_id = ${user.id} order by created_at desc, id desc limit 1
-  `;
-  expect(newest[0]!.prompt).toBe("p54");
+  expect(image.size_bytes).toBe(bytes.length);
+  const ref = await getFileRef(sql, image.id, user.id);
+  expect(ref?.file_path).toBeTruthy();
+  const onDisk = await readImageFile(config.imageDir, ref!.file_path);
+  expect(onDisk.equals(bytes)).toBe(true);
 });
 
-test("getRaw returns null (not another user's row) when the id belongs to a different user", async () => {
+test("getFileRef returns null (not another user's row) when the id belongs to a different user", async () => {
   const owner = await createUser(sql, uniqueEmail("owner"), "correct-password");
   const other = await createUser(sql, uniqueEmail("other"), "correct-password");
 
-  const image = await insertImage(sql, owner.id, {
+  const image = await createImage(sql, config.imageDir, owner.id, {
     prompt: "mine",
     mime: "image/png",
     bytes: Buffer.from("abc"),
     sourceKind: "generation",
   });
 
-  expect(await getRaw(sql, image.id, other.id)).toBeNull();
-  const ownRow = await getRaw(sql, image.id, owner.id);
-  expect(ownRow?.bytes.toString()).toBe("abc");
+  expect(await getFileRef(sql, image.id, other.id)).toBeNull();
+  const ownRef = await getFileRef(sql, image.id, owner.id);
+  expect(ownRef?.mime).toBe("image/png");
+});
+
+test("retainImages deletes rows (and unlinks their files) older than retentionDays, keeps recent ones", async () => {
+  const user = await createUser(sql, uniqueEmail("retention-age"), "correct-password");
+
+  const stale = await createImage(sql, config.imageDir, user.id, {
+    prompt: "old",
+    mime: "image/png",
+    bytes: Buffer.from("old-bytes"),
+    sourceKind: "generation",
+  });
+  const fresh = await createImage(sql, config.imageDir, user.id, {
+    prompt: "new",
+    mime: "image/png",
+    bytes: Buffer.from("new-bytes"),
+    sourceKind: "generation",
+  });
+  await sql`update generated_images set created_at = now() - interval '10 days' where id = ${stale.id}`;
+
+  await retainImages(sql, config.imageDir, { retentionDays: 7, maxPerUser: 100 });
+
+  expect(await getFileRef(sql, stale.id, user.id)).toBeNull();
+  await expect(readImageFile(config.imageDir, stale.id)).rejects.toThrow();
+
+  expect(await getFileRef(sql, fresh.id, user.id)).not.toBeNull();
+  expect((await readImageFile(config.imageDir, fresh.id)).toString()).toBe("new-bytes");
+});
+
+test("retainImages keeps only the newest maxPerUser rows per user and unlinks the rest", async () => {
+  const user = await createUser(sql, uniqueEmail("retention-cap"), "correct-password");
+  const ids: string[] = [];
+
+  for (let i = 0; i < 5; i++) {
+    const image = await createImage(sql, config.imageDir, user.id, {
+      prompt: `p${i}`,
+      mime: "image/png",
+      bytes: Buffer.from(`bytes-${i}`),
+      sourceKind: "generation",
+    });
+    ids.push(image.id);
+    // Force distinct created_at ordering (same-millisecond inserts in a
+    // tight loop could otherwise tie, making "newest" ambiguous).
+    await sql`update generated_images set created_at = now() + (${i}::text || ' seconds')::interval where id = ${image.id}`;
+  }
+
+  await retainImages(sql, config.imageDir, { retentionDays: 7, maxPerUser: 2 });
+
+  // Only the two newest (p3, p4 -> ids[3], ids[4]) survive.
+  for (const id of ids.slice(0, 3)) {
+    expect(await getFileRef(sql, id, user.id)).toBeNull();
+    await expect(readImageFile(config.imageDir, id)).rejects.toThrow();
+  }
+  for (const id of ids.slice(3)) {
+    expect(await getFileRef(sql, id, user.id)).not.toBeNull();
+  }
 });
 
 // --- routes ---
@@ -280,7 +375,7 @@ test("GET /api/v1/images/:id/raw returns 404 for another user's image and hides 
   const { userId: ownerId, cookie: ownerCookie } = await registerAndLogin(app, "raw-owner");
   const { cookie: otherCookie } = await registerAndLogin(app, "raw-other");
 
-  const image = await insertImage(sql, ownerId, {
+  const image = await createImage(sql, config.imageDir, ownerId, {
     prompt: "mine",
     mime: "image/png",
     bytes: Buffer.from(b64Png1x1(), "base64"),
@@ -296,12 +391,12 @@ test("GET /api/v1/images/:id/raw returns 404 for another user's image and hides 
   expect(otherRes.status).toBe(404);
 });
 
-test("DELETE /api/v1/images/:id removes only the caller's own image", async () => {
+test("DELETE /api/v1/images/:id removes only the caller's own image and unlinks its file", async () => {
   const app = buildApp({ sql, config });
   const { userId: ownerId, cookie: ownerCookie } = await registerAndLogin(app, "delete-owner");
   const { cookie: otherCookie } = await registerAndLogin(app, "delete-other");
 
-  const image = await insertImage(sql, ownerId, {
+  const image = await createImage(sql, config.imageDir, ownerId, {
     prompt: "mine",
     mime: "image/png",
     bytes: Buffer.from(b64Png1x1(), "base64"),
@@ -320,7 +415,8 @@ test("DELETE /api/v1/images/:id removes only the caller's own image", async () =
   });
   expect((await ownDelete.json()).deleted).toBe(true);
 
-  expect(await getRaw(sql, image.id, ownerId)).toBeNull();
+  expect(await getFileRef(sql, image.id, ownerId)).toBeNull();
+  await expect(readImageFile(config.imageDir, image.id)).rejects.toThrow();
 });
 
 test("POST /api/v1/images/generations rejects an unsafe provider base URL end to end via the real guard", async () => {
@@ -337,7 +433,7 @@ test("POST /api/v1/images/generations rejects an unsafe provider base URL end to
   expect(await res.json()).toEqual({ error: "provider_unsafe_url" });
 });
 
-test("full generate flow via a fake provider stores bytes, returns metadata, and never leaks the key", async () => {
+test("full generate flow via a fake provider writes the file to disk, returns metadata, and never leaks the key", async () => {
   const fake = startFakeProviderServer((req) => {
     expect(req.headers.get("authorization")).toBe("Bearer sk-test-provider-key");
     return Response.json({ data: [{ b64_json: b64Png1x1() }] });
@@ -359,7 +455,9 @@ test("full generate flow via a fake provider stores bytes, returns metadata, and
     const body = await res.json();
     expect(body.prompt).toBe("a red bicycle");
     expect(body.sourceKind).toBe("generation");
+    expect(body.mime).toBe("image/png");
     expect(JSON.stringify(body)).not.toContain("sk-test-provider-key");
+    expect(JSON.stringify(body)).not.toContain(config.imageDir); // never leak the on-disk path
 
     const listRes = await app.request("/api/v1/images", { headers: { Cookie: cookie } });
     const listBody = await listRes.json();
@@ -368,14 +466,44 @@ test("full generate flow via a fake provider stores bytes, returns metadata, and
 
     const rawRes = await app.request(`/api/v1/images/${body.id}/raw`, { headers: { Cookie: cookie } });
     expect(rawRes.status).toBe(200);
+    expect(rawRes.headers.get("content-type")).toBe("image/png");
     const rawBytes = Buffer.from(await rawRes.arrayBuffer());
     expect(rawBytes.equals(Buffer.from(b64Png1x1(), "base64"))).toBe(true);
+
+    // The file is really on disk, not just conjured for the response.
+    const onDisk = await readImageFile(config.imageDir, body.id);
+    expect(onDisk.equals(rawBytes)).toBe(true);
   } finally {
     fake.stop();
   }
 });
 
-test("full edits flow (multipart) via a fake provider stores the edited bytes", async () => {
+test("full generate flow labels a provider-returned JPEG as image/jpeg, not the hardcoded image/png", async () => {
+  const fake = startFakeProviderServer(() =>
+    Response.json({ data: [{ b64_json: jpegBytesMislabeledAsPng().toString("base64") }] }),
+  );
+  try {
+    const app = buildApp({ sql, config, imagesProviderDeps: { assertSafeUrl: noopGuard } });
+    const { userId, cookie } = await registerAndLogin(app, "full-generate-jpeg");
+    await configureProvider(userId, fake.baseUrl);
+
+    const res = await app.request("/api/v1/images/generations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: cookie },
+      body: JSON.stringify({ prompt: "x" }),
+    });
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.mime).toBe("image/jpeg");
+
+    const rawRes = await app.request(`/api/v1/images/${body.id}/raw`, { headers: { Cookie: cookie } });
+    expect(rawRes.headers.get("content-type")).toBe("image/jpeg");
+  } finally {
+    fake.stop();
+  }
+});
+
+test("full edits flow (multipart) via a fake provider stores the edited bytes on disk", async () => {
   const fake = startFakeProviderServer(async (req) => {
     const form = await req.formData();
     expect(form.get("prompt")).toBe("make it blue");
@@ -439,13 +567,13 @@ test("POST /api/v1/images/edits over the size cap is rejected by the body-limit 
   expect(res.status).toBe(413);
 });
 
-test("POST /api/v1/images/edits with a json sourceImageId edits an existing image and returns 404 for another user's id", async () => {
+test("POST /api/v1/images/edits with a json sourceImageId reads the source from disk and returns 404 for another user's id", async () => {
   const app = buildApp({ sql, config });
   const { userId: ownerId, cookie: ownerCookie } = await registerAndLogin(app, "edits-json-owner");
   const { cookie: otherCookie } = await registerAndLogin(app, "edits-json-other");
   await configureProvider(ownerId, "https://example.com/v1");
 
-  const source = await insertImage(sql, ownerId, {
+  const source = await createImage(sql, config.imageDir, ownerId, {
     prompt: "source",
     mime: "image/png",
     bytes: Buffer.from(b64Png1x1(), "base64"),

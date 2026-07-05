@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mando-hub-images
+  labels:
+    app.kubernetes.io/name: mando-hub
+    app.kubernetes.io/component: hub
+    app.kubernetes.io/version: "0.1.0"
+spec:
+  # Mounted at /data/images (deployment.yaml) as MANDO_IMAGE_DIR --
+  # ReadWriteOnce is sufficient because mando-hub's Deployment is pinned to
+  # exactly 1 replica (see deployment.yaml's comment on the in-memory
+  # tunnel registry); a single pod is ever attached at a time.
+  accessModes: ["ReadWriteOnce"]
+  # No storageClassName set -- uses the cluster's default StorageClass.
+  # Override here (or via a Kustomize/Helm overlay) if your cluster has no
+  # default or you need a specific one (e.g. a fast SSD class).
+  resources:
+    requests:
+      # Generous relative to a 10MB-per-image cap and a 100-per-user
+      # retention cap (config.ts's MANDO_IMAGE_MAX_PER_USER default) --
+      # sized for headroom across many users, not a hard per-user math.
+      # Resize (or switch to a StorageClass that supports online expansion)
+      # if usage approaches this.
+      storage: 20Gi

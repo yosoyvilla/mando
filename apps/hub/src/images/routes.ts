@@ -5,7 +5,8 @@ import type { Config } from "../config";
 import { requireUser, type AuthVariables } from "../auth/middleware";
 import { decryptSecret, isEncryptionConfigured } from "../crypto/secretbox";
 import { getProviderSettings } from "../providers/repo";
-import { deleteImage, getRaw, insertImage, listMetadata, type ImageMetadata } from "./repo";
+import { createImage, deleteImage, getFileRef, listMetadata, type ImageMetadata } from "./repo";
+import { readImageFile } from "./storage";
 import { editImage, generateImage, ProviderImageError, type ProviderClientDeps } from "./provider-client";
 
 type Sql = ReturnType<typeof postgres>;
@@ -42,6 +43,7 @@ function toMetadata(row: ImageMetadata) {
     id: row.id,
     prompt: row.prompt,
     mime: row.mime,
+    sizeBytes: row.size_bytes,
     sourceKind: row.source_kind,
     createdAt: row.created_at,
   };
@@ -61,17 +63,17 @@ function providerErrorResponse(err: ProviderImageError): { status: 400 | 502; bo
 // found" outcome as a real, owner-mismatched id keeps 404 the only signal
 // a caller gets either way (see auth/middleware.ts's requireMachineOwnership
 // for the same fold-DB-errors-into-404 pattern).
-async function getRawSafe(sql: Sql, id: string, userId: string) {
+async function getFileRefSafe(sql: Sql, id: string, userId: string) {
   try {
-    return await getRaw(sql, id, userId);
+    return await getFileRef(sql, id, userId);
   } catch {
     return null;
   }
 }
 
-async function deleteImageSafe(sql: Sql, id: string, userId: string): Promise<boolean> {
+async function deleteImageSafe(sql: Sql, imageDir: string, id: string, userId: string): Promise<boolean> {
   try {
-    return await deleteImage(sql, id, userId);
+    return await deleteImage(sql, imageDir, id, userId);
   } catch {
     return false;
   }
@@ -125,7 +127,7 @@ export function imageRoutes(
         },
         clientDeps,
       );
-      const image = await insertImage(sql, userId, {
+      const image = await createImage(sql, config.imageDir, userId, {
         prompt: parsed.data.prompt,
         mime: result.mime,
         bytes: result.bytes,
@@ -178,12 +180,12 @@ export function imageRoutes(
       const parsed = editJsonSchema.safeParse(await parseJsonBody(c));
       if (!parsed.success) return c.json({ error: "invalid request" }, 400);
 
-      const row = await getRawSafe(sql, parsed.data.sourceImageId, userId);
+      const row = await getFileRefSafe(sql, parsed.data.sourceImageId, userId);
       if (!row) return c.json({ error: "not found" }, 404);
 
       prompt = parsed.data.prompt;
       size = parsed.data.size;
-      sourceBytes = row.bytes;
+      sourceBytes = await readImageFile(config.imageDir, row.file_path);
       sourceMime = row.mime;
     }
 
@@ -201,7 +203,7 @@ export function imageRoutes(
         },
         clientDeps,
       );
-      const image = await insertImage(sql, userId, {
+      const image = await createImage(sql, config.imageDir, userId, {
         prompt,
         mime: result.mime,
         bytes: result.bytes,
@@ -222,15 +224,16 @@ export function imageRoutes(
     return c.json({ images: rows.map(toMetadata) }, 200);
   });
 
-  // Returns the bytea column as one buffered Response body -- postgres.js
-  // materializes bytea into a Buffer already, so there is no chunked
-  // DB-to-HTTP streaming happening here, only a single in-memory copy
-  // bounded by IMAGE_MAX_BYTES (enforced at insert time, never after).
+  // Reads the file off disk (images/storage.ts) as a single in-memory
+  // Buffer, bounded by IMAGE_MAX_BYTES (enforced when the file was written,
+  // never after) -- owner-scoped via getFileRef's WHERE user_id clause, so
+  // a 404 here means "doesn't exist OR isn't yours", indistinguishably.
   app.get("/api/v1/images/:id/raw", requireUser(sql), async (c) => {
-    const row = await getRawSafe(sql, c.req.param("id"), c.get("userId"));
+    const row = await getFileRefSafe(sql, c.req.param("id"), c.get("userId"));
     if (!row) return c.notFound();
 
-    return new Response(new Uint8Array(row.bytes), {
+    const bytes = await readImageFile(config.imageDir, row.file_path);
+    return new Response(new Uint8Array(bytes), {
       headers: {
         "Content-Type": row.mime,
         // Never let a browser sniff/execute stored bytes as anything other
@@ -242,7 +245,7 @@ export function imageRoutes(
   });
 
   app.delete("/api/v1/images/:id", requireUser(sql), async (c) => {
-    const deleted = await deleteImageSafe(sql, c.req.param("id"), c.get("userId"));
+    const deleted = await deleteImageSafe(sql, config.imageDir, c.req.param("id"), c.get("userId"));
     return c.json({ ok: true, deleted }, 200);
   });
 

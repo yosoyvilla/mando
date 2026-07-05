@@ -40,6 +40,19 @@ const Schema = z.object({
   // silently truncate/pad (weakening it) or throw deep inside node:crypto
   // at first use instead of at startup where an operator will actually see it.
   MANDO_ENCRYPTION_KEY: z.string().min(1).optional(),
+  // Where generated/edited image bytes live on disk (images/storage.ts) --
+  // moved off Postgres bytea (v1.4) because per-user galleries grow
+  // unbounded and bytea rows bloat the DB/backups for data that's cheap to
+  // regenerate. Defaults to a repo-local dev directory; deploy/docker-
+  // compose.yml and deploy/k8s override this to a mounted volume
+  // (/data/images) so the directory survives container restarts/rescheduling.
+  MANDO_IMAGE_DIR: z.string().min(1).default(".mando-images"),
+  // Dual retention enforced by retention.ts's scheduled sweep (images/repo.ts's
+  // retainImages): delete anything older than this many days, AND separately
+  // cap each user at MANDO_IMAGE_MAX_PER_USER (oldest deleted first) --
+  // either condition alone triggers deletion for a given row.
+  MANDO_IMAGE_RETENTION_DAYS: z.coerce.number().int().positive().default(7),
+  MANDO_IMAGE_MAX_PER_USER: z.coerce.number().int().positive().default(100),
 });
 
 // Exactly 64 lowercase/uppercase hex characters decodes to 32 bytes -- that
@@ -73,6 +86,9 @@ export type Config = {
   rateLimitImagesMax?: number;
   retentionIntervalMs?: number;
   encryptionKey?: Buffer;
+  imageDir: string;
+  imageRetentionDays: number;
+  imageMaxPerUser: number;
 };
 
 export function loadConfig(env: Record<string, string | undefined>): Config {
@@ -90,5 +106,8 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
     rateLimitImagesMax: p.MANDO_RATE_LIMIT_IMAGES_MAX,
     retentionIntervalMs: p.MANDO_RETENTION_INTERVAL_MS,
     encryptionKey: p.MANDO_ENCRYPTION_KEY ? decodeEncryptionKey(p.MANDO_ENCRYPTION_KEY) : undefined,
+    imageDir: p.MANDO_IMAGE_DIR,
+    imageRetentionDays: p.MANDO_IMAGE_RETENTION_DAYS,
+    imageMaxPerUser: p.MANDO_IMAGE_MAX_PER_USER,
   };
 }

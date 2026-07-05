@@ -1,4 +1,7 @@
 import { test, expect, beforeAll } from "bun:test";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { getDb } from "../../src/db/client";
 import { runMigrations } from "../../src/db/migrate";
 import { createUser } from "../../src/users/repo";
@@ -6,6 +9,8 @@ import { createSession } from "../../src/auth/session";
 import { createMachine, insertMachineToken } from "../../src/machines/repo";
 import { createPairingRequest, approvePairing, sweepPendingTokens } from "../../src/pairing/service";
 import { runRetention } from "../../src/retention";
+import { createImage, getFileRef } from "../../src/images/repo";
+import { readImageFile } from "../../src/images/storage";
 
 const url = process.env.TEST_DATABASE_URL ?? "postgres://mando:mando@localhost:5433/mando";
 const sql = getDb(url);
@@ -89,6 +94,31 @@ test("runRetention respects a custom tokenRetentionWindowMs", async () => {
   await runRetention(sql, { tokenRetentionWindowMs: 60 * 60 * 1000 });
 
   expect((await sql`select id from machine_tokens where id = ${tokenId}`).length).toBe(0);
+});
+
+test("runRetention purges images past retentionDays when imageDir options are passed, and is a no-op for images when they're omitted", async () => {
+  const user = await createUser(sql, uniqueEmail("retention-images"), "correct-password");
+  const imageDir = await mkdtemp(join(tmpdir(), "mando-images-test-"));
+
+  const stale = await createImage(sql, imageDir, user.id, {
+    prompt: "old",
+    mime: "image/png",
+    bytes: Buffer.from("old-bytes"),
+    sourceKind: "generation",
+  });
+  await sql`update generated_images set created_at = now() - interval '10 days' where id = ${stale.id}`;
+
+  // Omitting the image* options entirely skips the images sweep -- same
+  // behavior as before this option existed, so every other test in this
+  // file (which calls runRetention(sql) with no image options) is
+  // unaffected by generated_images rows created elsewhere.
+  await runRetention(sql);
+  expect(await getFileRef(sql, stale.id, user.id)).not.toBeNull();
+
+  const summary = await runRetention(sql, { imageDir, imageRetentionDays: 7, imageMaxPerUser: 100 });
+  expect(summary.imagesDeleted).toBeGreaterThanOrEqual(1);
+  expect(await getFileRef(sql, stale.id, user.id)).toBeNull();
+  await expect(readImageFile(imageDir, stale.id)).rejects.toThrow();
 });
 
 test("sweepPendingTokens removes the in-memory pending-token entry created by approvePairing and reports the count", async () => {

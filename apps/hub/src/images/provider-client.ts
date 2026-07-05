@@ -82,6 +82,45 @@ async function guardUrl(baseUrl: string, deps: ProviderClientDeps): Promise<void
   }
 }
 
+// Sniffs the REAL image format from decoded bytes via magic numbers,
+// rather than trusting response_format:"b64_json" callers to also return
+// an accurate mime type (or trusting our own hardcoded assumption). This
+// fixes the flux-JPEG-as-png debt noted in the plan: some OpenAI-compatible
+// providers (e.g. flux) return JPEG bytes for an image/png-labeled
+// request, and mislabeling that as image/png only surfaces later, as a
+// browser refusing to render :id/raw's bytes as the declared type.
+// Falls back to a generic binary type when no known signature matches,
+// rather than guessing -- an unrecognized format should never be
+// mislabeled as a specific image type.
+export function sniffImageMime(bytes: Buffer): string {
+  if (
+    bytes.length >= 8 &&
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47 &&
+    bytes[4] === 0x0d &&
+    bytes[5] === 0x0a &&
+    bytes[6] === 0x1a &&
+    bytes[7] === 0x0a
+  ) {
+    return "image/png";
+  }
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return "image/jpeg";
+  }
+  if (bytes.length >= 12 && bytes.toString("ascii", 0, 4) === "RIFF" && bytes.toString("ascii", 8, 12) === "WEBP") {
+    return "image/webp";
+  }
+  if (
+    bytes.length >= 6 &&
+    (bytes.toString("ascii", 0, 6) === "GIF87a" || bytes.toString("ascii", 0, 6) === "GIF89a")
+  ) {
+    return "image/gif";
+  }
+  return "application/octet-stream";
+}
+
 function decodeAndCapB64Json(b64: string): Buffer {
   const bytes = Buffer.from(b64, "base64");
   if (bytes.length > IMAGE_MAX_BYTES) {
@@ -115,7 +154,8 @@ async function parseImagesResponse(res: Response): Promise<ProviderImageResult> 
     throw new ProviderImageError("invalid_response", "provider response did not include b64_json image data");
   }
 
-  return { bytes: decodeAndCapB64Json(b64), mime: "image/png" };
+  const bytes = decodeAndCapB64Json(b64);
+  return { bytes, mime: sniffImageMime(bytes) };
 }
 
 // Wraps fetch failures (network errors, DNS failures, and -- critically --
