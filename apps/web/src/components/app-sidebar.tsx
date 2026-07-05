@@ -2,18 +2,17 @@ import {
   ArrowRightStartOnRectangleIcon,
   ChevronUpDownIcon,
   Cog6ToothIcon,
-  EllipsisHorizontalIcon,
   FileDiffIcon,
   HomeIcon,
   PlusIcon,
   ServerIcon,
   ShieldCheckIcon,
-  TrashIcon,
 } from "@/components/icons/lucide";
 import { useEffect, useState, useMemo } from "react";
 import { parsePatchFiles } from "@pierre/diffs";
 import { Avatar } from "@/components/ui/avatar";
 import { StatusDot } from "@/components/status-dot";
+import { SidebarSessionList } from "@/components/sidebar-session-list";
 import { ThemeSwitcher } from "@/components/theme-switcher";
 import {
   ComboBox,
@@ -41,8 +40,6 @@ import {
   SidebarHeader,
   SidebarItem,
   SidebarLabel,
-  SidebarLink,
-  SidebarMenuTrigger,
   SidebarRail,
   SidebarSection,
   SidebarSectionGroup,
@@ -150,12 +147,6 @@ function MachineSwitcher() {
       </ComboBox>
     </div>
   );
-}
-
-function truncateTitle(title: string, maxLength = 40): string {
-  if (title.length <= maxLength) return title;
-  const halfLength = Math.floor((maxLength - 3) / 2);
-  return `${title.slice(0, halfLength)}...${title.slice(-halfLength)}`;
 }
 
 export default function AppSidebar(
@@ -282,40 +273,10 @@ export default function AppSidebar(
           </SidebarSection>
 
           <SidebarSection label="Sessions">
-            {sessions.map((session) => (
-              <SidebarItem key={session.id} tooltip={session.title}>
-                {({ isCollapsed, isFocused }) => (
-                  <>
-                    <SidebarLink href={`/session/${session.id}`}>
-                      <SidebarLabel>
-                        {truncateTitle(session.title)}
-                      </SidebarLabel>
-                    </SidebarLink>
-                    {(!isCollapsed || isFocused) && (
-                      <Menu>
-                        <SidebarMenuTrigger aria-label="Session options">
-                          <EllipsisHorizontalIcon />
-                        </SidebarMenuTrigger>
-                        <MenuContent
-                          popover={{
-                            offset: 0,
-                            placement: "right top",
-                          }}
-                        >
-                          <MenuItem
-                            intent="danger"
-                            onAction={() => handleDeleteSession(session.id)}
-                          >
-                            <TrashIcon />
-                            Delete Session
-                          </MenuItem>
-                        </MenuContent>
-                      </Menu>
-                    )}
-                  </>
-                )}
-              </SidebarItem>
-            ))}
+            <SidebarSessionList
+              sessions={sessions}
+              onDeleteSession={handleDeleteSession}
+            />
           </SidebarSection>
         </SidebarSectionGroup>
       </SidebarContent>

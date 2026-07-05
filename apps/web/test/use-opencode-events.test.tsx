@@ -13,6 +13,7 @@ import { useOpencodeEvents } from "../src/hooks/use-opencode-events";
 import { useSessions } from "../src/hooks/use-opencode";
 import { useSessionMessages } from "../src/hooks/use-session-messages";
 import { useMachineStore } from "../src/stores/machine-store";
+import type { Session } from "@opencode-ai/sdk/v2";
 
 // Locks the SSE layer to the REAL opencode 1.17.13 wire contract:
 //   - frames are `data: {"id","type","properties":{...}}` (payload field is
@@ -27,11 +28,14 @@ import { useMachineStore } from "../src/stores/machine-store";
 // fail.
 
 const PROXY = "/api/v1/machines/m1/opencode";
+// `useSessions()` now types its data as `Session[]` (it sorts the response),
+// so fixtures compared against it need at least a nominal cast -- this test
+// only exercises the id/title/time fields the SSE handlers touch.
 const SEED = {
   id: "ses_seed",
   title: "seed",
   time: { created: 1, updated: 1 },
-};
+} as Session;
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {

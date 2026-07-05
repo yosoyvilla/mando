@@ -3,7 +3,7 @@ import { useMachineStore } from "@/stores/machine-store";
 import { opencodeJson, opencodeRequest } from "@/lib/opencode-fetch";
 import { hubClient as defaultHubClient } from "@/lib/hub-client-instance";
 import type { HubClient, Machine } from "@/lib/hub-client";
-import type { SessionStatus } from "@opencode-ai/sdk/v2";
+import type { Session, SessionStatus } from "@opencode-ai/sdk/v2";
 
 function useBackend() {
   const machineId = useMachineStore((s) => s.selectedMachineId);
@@ -50,6 +50,31 @@ export function sessionsPath(connectDirectory?: string | null): string {
     : "/session";
 }
 
+// Newest-first, matching Claude Code /rc's "what am I working on right now"
+// framing -- the sidebar pins index 0 as the Live session. Shared with
+// use-opencode-events.ts so an event-driven cache update (session.created/
+// session.updated) re-sorts with the exact same comparator the initial
+// fetch below uses, keeping the Live pin stable across both paths.
+export function sortSessions(sessions: Session[]): Session[] {
+  return [...sessions].sort(
+    (a, b) =>
+      (b.time.updated ?? b.time.created) - (a.time.updated ?? a.time.created),
+  );
+}
+
+// `GET /session`'s response is a bare array on real opencode (see
+// `sessionsPath` above), but this hook file's generic `fetcher` types every
+// GET as `any` -- so a dedicated fetcher is needed here to sort without
+// affecting the other untyped consumers. Defensive `Array.isArray` guard:
+// an unexpected non-array response (or a test double standing in for one)
+// passes through unsorted rather than throwing inside the SWR fetch chain.
+async function sessionsFetcher(
+  [machineId, path]: readonly [string, string],
+): Promise<Session[]> {
+  const data = await opencodeJson<unknown>(machineId, path);
+  return Array.isArray(data) ? sortSessions(data as Session[]) : (data as Session[]);
+}
+
 export function useMachines(client: HubClient = defaultHubClient) {
   return useSWR<Machine[]>("hub/machines", () => client.listMachines(), {
     refreshInterval: 5_000,
@@ -73,7 +98,7 @@ export function useSessions() {
 
   return useSWR(
     backend ? ([backend.machineId, path] as const) : null,
-    fetcher,
+    sessionsFetcher,
   );
 }
 

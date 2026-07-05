@@ -16,7 +16,7 @@ import {
   getMessagesKey,
   sortSessionMessages,
 } from "@/hooks/use-session-messages";
-import { sessionsPath } from "@/hooks/use-opencode";
+import { sessionsPath, sortSessions } from "@/hooks/use-opencode";
 import { opencodeEvents } from "@/lib/opencode-fetch";
 
 // The installed `@opencode-ai/sdk`'s `Event` union already types this
@@ -75,13 +75,6 @@ function removeById<T extends { id: string }>(
   id: string,
 ) {
   return (items ?? []).filter((item) => item.id !== id);
-}
-
-function sortSessions(sessions: Session[]) {
-  return [...sessions].sort(
-    (a: Session, b: Session) =>
-      (b.time.updated ?? b.time.created) - (a.time.updated ?? a.time.created),
-  );
 }
 
 function mutateSessions(
@@ -909,6 +902,16 @@ function parseEvent(data: string): RuntimeEvent | null {
   }
 }
 
+// Native `EventSource` auto-reconnects on transient errors on its own
+// schedule, but behind Cloudflare it has been observed entering rapid error
+// loops (ERR_HTTP2_PROTOCOL_ERROR) that hammer the hub. These constants
+// replace that with a bounded exponential backoff: 1s, 2s, 4s, ... capped at
+// 30s, plus up to 500ms of jitter so many tabs reconnecting at once don't
+// all hit the hub in the same instant.
+const RECONNECT_BASE_MS = 1000;
+const RECONNECT_MAX_MS = 30_000;
+const RECONNECT_JITTER_MS = 500;
+
 export function useOpencodeEvents(
   machineId: string | null | undefined,
   connectDirectory?: string | null,
@@ -934,17 +937,60 @@ export function useOpencodeEvents(
       timerRef.current = window.setTimeout(flush, 16);
     };
 
-    // The unprefixed `/event` (confirmed against a live opencode 1.17.13)
-    // replaces the `/api/*` family's `/api/event`.
-    const source = opencodeEvents(machineId, "/event");
+    let cancelled = false;
+    let source: EventSource | null = null;
+    let reconnectTimer: number | null = null;
+    let attempt = 0;
 
-    source.onmessage = (message) => {
-      const event = parseEvent(message.data);
-      if (event) enqueue(event);
+    const scheduleReconnect = () => {
+      const delay =
+        Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** attempt) +
+        Math.random() * RECONNECT_JITTER_MS;
+      attempt += 1;
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = null;
+        connect();
+      }, delay);
     };
 
+    // The unprefixed `/event` (confirmed against a live opencode 1.17.13)
+    // replaces the `/api/*` family's `/api/event`.
+    const connect = () => {
+      if (cancelled) return;
+      const nextSource = opencodeEvents(machineId, "/event");
+      source = nextSource;
+
+      // Either signal counts as "the connection is healthy again" -- a
+      // stream that opens but stays quiet for a while shouldn't be treated
+      // as still failing.
+      nextSource.onopen = () => {
+        attempt = 0;
+      };
+
+      nextSource.onmessage = (message) => {
+        attempt = 0;
+        const event = parseEvent(message.data);
+        if (event) enqueue(event);
+      };
+
+      nextSource.onerror = () => {
+        // Close immediately to disable the browser's own uncapped
+        // auto-reconnect, then schedule our bounded one instead.
+        nextSource.close();
+        if (cancelled) return;
+        scheduleReconnect();
+      };
+    };
+
+    connect();
+
     return () => {
-      source.close();
+      cancelled = true;
+      source?.close();
+      if (reconnectTimer !== null) {
+        window.clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
       if (timerRef.current !== null) {
         window.clearTimeout(timerRef.current);
         timerRef.current = null;
