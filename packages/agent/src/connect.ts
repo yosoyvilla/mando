@@ -44,6 +44,10 @@ export interface ConnectOpts {
   // everything the CLI layer already parsed, instead of index.ts parsing
   // argv a second time per-subcommand.
   dir?: string;
+  // Not used by connect() itself -- a home for the `--check` flag index.ts's
+  // CLI parser extracts for `mando upgrade` (see upgrade.ts), for the same
+  // reason as `dir` above.
+  checkOnly?: boolean;
   // Test-only injection points (see task-3.4-report.md "How the daemon
   // spawn is tested"). None of these change connect()'s documented
   // behavior; they only let tests swap the real network/process calls for
@@ -163,7 +167,12 @@ async function pollUntilApproved(
 // import.meta.dir is a virtual `/$bunfs/...` path rather than a real
 // on-disk directory -- there is no `Bun.isStandaloneExecutable` (checked;
 // it does not exist on this bun version) to ask directly instead.
-function runningFromCompiledBinary(): boolean {
+//
+// Exported for upgrade.ts, which refuses to self-update at all when this
+// is false -- overwriting `process.execPath` only makes sense for an
+// installed, compiled binary; running from source, `process.execPath` is
+// just the `bun` interpreter itself, not anything mando shipped.
+export function runningFromCompiledBinary(): boolean {
   return import.meta.dir.startsWith("/$bunfs");
 }
 

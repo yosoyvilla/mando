@@ -179,6 +179,7 @@ Commands:
 | `mando install-command` | Writes the `/mando` command file into opencode's commands directory so it can be run from inside a session. |
 | `mando autostart <enable\|disable\|status>` | Registers (or removes) the agent as a startup service, so the machine reconnects on its own after a reboot. See [Starting on boot](#starting-on-boot). |
 | `mando doctor` | Runs a set of diagnostic checks and reports PASS/FAIL/SKIP for each. See [Troubleshooting](#troubleshooting). |
+| `mando upgrade` | Downloads and installs the latest release in place of the running binary. See [Updating the agent](#updating-the-agent). |
 | `mando version` (or `mando --version`) | Prints the agent's release version. |
 
 Flags for `mando connect`:
@@ -188,7 +189,20 @@ Flags for `mando connect`:
 | `--hub <url>` | Hub address to connect to. Required for the first pairing unless `MANDO_HUB` is set. |
 | `--opencode-port <port>` | Local opencode port to use, skipping automatic detection. |
 | `--opencode-auto` | Detects the local opencode server, and starts one (`opencode serve`, in the current directory) if none is running. Used by the `/mando` command. |
-| `--json` | Machine-readable output. Accepted by `connect`, `disconnect`, `status`, `autostart`, and `doctor`. |
+| `--json` | Machine-readable output. Accepted by `connect`, `disconnect`, `status`, `autostart`, `doctor`, and `upgrade`. |
+
+### Updating the agent
+
+`mando upgrade` downloads the latest [GitHub release](https://github.com/yosoyvilla/mando/releases/latest), verifies it runs before touching anything, and replaces the running binary with it:
+
+```bash
+mando upgrade          # checks, downloads, verifies, and installs the update
+mando upgrade --check  # reports whether an update is available, without installing it
+```
+
+This only works on a binary installed via the one-line install script or `bun run build:binary` above — running `mando` from source (`bun run src/index.ts`) has nothing for it to overwrite, and it refuses with a clear message instead. It also refuses outright if a newer release simply isn't out yet, printing "Already up to date" instead of re-downloading the binary you already have.
+
+Before replacing anything, it downloads the new binary to `<path>.new` next to the current one, `chmod +x`s it, and runs its own `--version` to confirm it actually starts and reports the version it claims to be — a failed download or a corrupted asset never gets any further than that. It then best-effort copies the current binary aside to `<path>.bak` (a rollback copy — if that copy fails, for example the disk is full, the upgrade still proceeds) before atomically renaming the verified download over the running binary's path. If the install directory isn't writable (a common case for `/usr/local/bin`), it reports that clearly and points you back at the [one-line install script](#one-line-install-recommended), which already knows how to escalate with `sudo` or fall back to `~/.local/bin`.
 
 ### Starting on boot
 
