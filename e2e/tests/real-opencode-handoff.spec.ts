@@ -208,6 +208,74 @@ test.describe("real opencode core surface via the hub proxy", () => {
     expect(Array.isArray(body.providers), "providers payload should carry a providers array").toBeTruthy();
   });
 
+  // A file part -- the composer's attachment wire shape ({type:"file",
+  // mime, filename, url}, see apps/web/src/lib/attachments.ts's
+  // `buildFileParts`) -- must round-trip through the proxy against a REAL
+  // opencode server, not just the stub. `noReply: true` for the same reason
+  // as the handoff describe above: no provider is configured in CI, and
+  // without it the request holds open attempting a reply. What's asserted
+  // is tunnel delivery + persistence of the file part's mime/filename/url,
+  // exactly as sent (opencode is VERIFIED to persist file-part data URLs
+  // verbatim -- see the plan's Global Constraints).
+  test("a file part sent via the hub proxy round-trips through the real opencode session", async ({ request }) => {
+    const createRes = await request.post(
+      `${state.hubBaseUrl}/api/v1/machines/${state.machineId}/opencode/session`,
+      { headers: { cookie, "content-type": "application/json" }, data: { directory: state.directory } },
+    );
+    expect(createRes.ok(), `POST .../opencode/session should be 2xx, got ${createRes.status()}`).toBeTruthy();
+    const created = (await createRes.json()) as { id: string };
+
+    const filename = `e2e-attachment-${crypto.randomUUID().slice(0, 8)}.png`;
+    const dataUrl =
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+
+    const messageRes = await request.post(
+      `${state.hubBaseUrl}/api/v1/machines/${state.machineId}/opencode/session/${created.id}/message`,
+      {
+        headers: { cookie, "content-type": "application/json" },
+        data: {
+          noReply: true,
+          parts: [{ type: "file", mime: "image/png", filename, url: dataUrl }],
+        },
+      },
+    );
+    expect(
+      messageRes.ok(),
+      `POST .../message (file part, noReply) should be accepted by real opencode (2xx), got ${messageRes.status()}`,
+    ).toBeTruthy();
+
+    // Read-back guard, same shape as fetchMessages/opencodeMessageText above
+    // but widened locally to the file-part fields those helpers don't type
+    // (they only ever needed `text`).
+    await expect
+      .poll(
+        async () => {
+          const res = await request.get(
+            `${state.hubBaseUrl}/api/v1/machines/${state.machineId}/opencode/session/${created.id}/message`,
+            { headers: { cookie } },
+          );
+          if (!res.ok()) return false;
+          const entries = (await res.json()) as Array<{
+            info: { role: string };
+            parts: Array<{ type: string; mime?: string; filename?: string; url?: string }>;
+          }>;
+          const filePart = entries
+            .find((entry) => entry.info.role === "user")
+            ?.parts.find((part) => part.type === "file");
+          return (
+            filePart?.mime === "image/png" &&
+            filePart?.filename === filename &&
+            filePart?.url === dataUrl
+          );
+        },
+        {
+          message: "the file part should round-trip through the real opencode session intact",
+          timeout: 10_000,
+        },
+      )
+      .toBe(true);
+  });
+
   // The live SSE stream (use-opencode-events.ts opens `/event`) is what
   // keeps the session list and message view fresh. Prove a frame actually
   // flows through the proxy by reading the stream until opencode's opening
