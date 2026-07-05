@@ -3,7 +3,6 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useTheme } from "@/providers/theme-provider";
 import { useBreadcrumb } from "@/contexts/breadcrumb-context";
 import { SwatchIcon, CpuChipIcon, KeyIcon } from "@/components/icons/lucide";
-import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -11,6 +10,7 @@ import {
   SelectTrigger,
 } from "@/components/ui/select";
 import { Tabs, TabList, Tab, TabPanel } from "@/components/ui/tabs";
+import { ProviderSettings } from "@/components/provider-settings";
 
 const themes = [
   { id: "light", title: "Light" },
@@ -41,6 +41,11 @@ function ThemeSetting() {
   );
 }
 
+// User-scoped, independent of any paired machine (see docs/superpowers/
+// plans/2026-07-05-image-generation.md, Task 4). `/_app.tsx`'s layout
+// bypasses its "no machine selected -> redirect to /machines" gate for
+// this exact pathname so the page renders even with zero machines paired
+// -- the Provider tab below has nothing to do with any machine.
 export const Route = createFileRoute("/_app/settings")({
   component: SettingsPage,
 });
@@ -83,9 +88,9 @@ function SettingsPage() {
             <CpuChipIcon className="size-4" data-slot="icon" />
             Model
           </Tab>
-          <Tab id="api">
+          <Tab id="provider">
             <KeyIcon className="size-4" data-slot="icon" />
-            API
+            Provider
           </Tab>
         </TabList>
 
@@ -160,41 +165,19 @@ function SettingsPage() {
           </div>
         </TabPanel>
 
-        <TabPanel id="api" className="pt-6">
+        <TabPanel id="provider" className="pt-6">
           <div className="space-y-6">
             <div>
-              <h2 className="text-lg font-semibold">API Connections</h2>
+              <h2 className="text-lg font-semibold">Image Provider</h2>
               <p className="text-sm text-muted-fg">
-                Manage your connection settings and API keys.
+                Connect your own OpenAI-compatible image provider. The base
+                URL and API key are used by the Images section to generate
+                and edit images; the key is encrypted at rest and never
+                shown again once saved.
               </p>
             </div>
 
-            <div className="space-y-6">
-              <div className="space-y-2">
-                <p className="text-sm font-medium">OpenCode Endpoint</p>
-                <p className="text-xs text-muted-fg">
-                  The URL of your OpenCode server instance.
-                </p>
-                <Input
-                  defaultValue="http://localhost:4000"
-                  readOnly
-                  className="w-fit font-mono text-sm text-muted-fg bg-muted/5"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <p className="text-sm font-medium">API Key</p>
-                <p className="text-xs text-muted-fg">
-                  Your API key is stored locally and never sent to our servers.
-                </p>
-                <Input
-                  type="password"
-                  value="sk-................................"
-                  readOnly
-                  className="w-fit font-mono text-sm text-muted-fg bg-muted/5"
-                />
-              </div>
-            </div>
+            <ProviderSettings />
           </div>
         </TabPanel>
       </Tabs>

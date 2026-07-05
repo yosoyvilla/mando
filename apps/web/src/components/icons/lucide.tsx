@@ -20,6 +20,7 @@ import {
   GripVertical,
   Grid2X2Plus,
   Home,
+  Image,
   Info,
   KeyRound,
   LifeBuoy,
@@ -88,6 +89,7 @@ export const FolderIcon = createAppIcon(Folder);
 export const GlobeAltIcon = createAppIcon(Globe);
 export const GripVerticalIcon = createAppIcon(GripVertical);
 export const HomeIcon = createAppIcon(Home);
+export const PhotoIcon = createAppIcon(Image);
 export const InformationCircleIcon = createAppIcon(Info);
 export const KeyIcon = createAppIcon(KeyRound);
 export const LifebuoyIcon = createAppIcon(LifeBuoy);

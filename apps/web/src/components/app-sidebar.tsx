@@ -4,6 +4,7 @@ import {
   Cog6ToothIcon,
   FileDiffIcon,
   HomeIcon,
+  PhotoIcon,
   PlusIcon,
   ServerIcon,
   ShieldCheckIcon,
@@ -270,6 +271,31 @@ export default function AppSidebar(
             >
               <FileDiffIcon className="size-4 shrink-0" data-slot="icon" />
               <SidebarLabel>Diff</SidebarLabel>
+            </SidebarItem>
+          </SidebarSection>
+
+          {/* User-scoped, independent of any paired machine (see
+              docs/superpowers/plans/2026-07-05-image-generation.md, Task
+              4) -- always available, unlike the machine-scoped items
+              above, since /_app.tsx's layout renders this sidebar even
+              with zero machines paired as long as the current route is
+              /images or /settings. */}
+          <SidebarSection>
+            <SidebarItem
+              tooltip="Images"
+              href="/images"
+              className="cursor-pointer gap-x-2"
+            >
+              <PhotoIcon className="size-4 shrink-0" data-slot="icon" />
+              <SidebarLabel>Images</SidebarLabel>
+            </SidebarItem>
+            <SidebarItem
+              tooltip="Settings"
+              href="/settings"
+              className="cursor-pointer gap-x-2"
+            >
+              <Cog6ToothIcon className="size-4 shrink-0" data-slot="icon" />
+              <SidebarLabel>Settings</SidebarLabel>
             </SidebarItem>
           </SidebarSection>
 

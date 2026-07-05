@@ -109,6 +109,27 @@ exposed to the network.
   - Login uses a precomputed dummy argon2id hash (`DUMMY_HASH`) when an email
     doesn't match a user, so a missing account and a wrong password take the
     same amount of time.
+- **Provider API keys are encrypted at rest, never returned or logged.**
+  `apps/hub/src/crypto/secretbox.ts` encrypts each user's provider API key
+  with AES-256-GCM (`iv(12) || authTag(16) || ciphertext`, a fresh IV per
+  `encryptSecret` call — never derived or reused) using `MANDO_ENCRYPTION_KEY`
+  (32 bytes, hex or base64; parsed in `config.ts`). When that key is unset,
+  `isEncryptionConfigured()` is false and the whole provider/images feature
+  is disabled — routes return 503 `{error:"images_disabled"}` rather than
+  falling back to plaintext. Provider settings and image generation/editing
+  are entirely user-scoped (`requireUser`, no machine or tunnel involved —
+  see `apps/hub/src/providers/routes.ts` and `apps/hub/src/images/routes.ts`);
+  `GET /api/v1/provider` reports only `hasKey`, never the key itself. The
+  user-supplied provider base URL is SSRF-guarded by
+  `apps/hub/src/providers/url-guard.ts`'s `assertSafeProviderUrl` — https
+  only, rejects any private/loopback/link-local/CGNAT/ULA address whether
+  given literally or reached via DNS (including IPv4-mapped IPv6) — called
+  both when the URL is saved AND again immediately before every outbound
+  request with `redirect:"error"`, since a hostname that resolved safely at
+  save time can rebind to a private address later. Generated images are
+  stored as Postgres `bytea` (`generated_images` table), rejected before
+  insert if over a 10MB cap, and retained at most 50 per user — oldest
+  deleted automatically once a new insert exceeds that.
 - **No emojis** anywhere — code, comments, docs, commit messages, CLI output.
 - **Commits:** single-line message, no co-author trailer, no session/URL
   trailers, one commit per logical change.

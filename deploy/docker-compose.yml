@@ -29,6 +29,11 @@ services:
       # Optional: bootstrap an admin user on first start.
       # MANDO_ADMIN_EMAIL: admin@example.com
       # MANDO_ADMIN_PASSWORD: change-me-too
+      # Optional: enables the Images/provider feature (bring-your-own
+      # OpenAI-compatible image provider, API key encrypted at rest).
+      # Generate one with `openssl rand -hex 32`. Feature stays disabled
+      # if this is unset.
+      # MANDO_ENCRYPTION_KEY: change-me-to-a-64-char-hex-string
     ports: ["127.0.0.1:8080:8080"]
     depends_on:
       postgres: { condition: service_healthy }

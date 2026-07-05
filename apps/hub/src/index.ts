@@ -1,7 +1,7 @@
 import { loadConfig, type Config } from "./config";
 import { getDb } from "./db/client";
 import { runMigrations } from "./db/migrate";
-import { buildApp, websocket, type AppDeps } from "./app";
+import { buildApp, websocket, MAX_REQUEST_BODY_BYTES, type AppDeps } from "./app";
 import { bootstrapAdmin } from "./bootstrap";
 import { DEFAULT_RATE_LIMITS } from "./middleware/rate-limit";
 import { runRetention } from "./retention";
@@ -24,6 +24,9 @@ function rateLimitsFromConfig(config: Config): AppDeps["rateLimits"] {
       : undefined,
     wsAgent: config.rateLimitWsAgentMax
       ? { ...DEFAULT_RATE_LIMITS.wsAgent, max: config.rateLimitWsAgentMax }
+      : undefined,
+    images: config.rateLimitImagesMax
+      ? { ...DEFAULT_RATE_LIMITS.images, max: config.rateLimitImagesMax }
       : undefined,
   };
 }
@@ -50,7 +53,12 @@ if (import.meta.main) {
   retentionTimer.unref();
 
   const app = buildApp({ sql, config, rateLimits: rateLimitsFromConfig(config) });
-  const server = Bun.serve({ port: config.port, fetch: app.fetch, websocket });
+  const server = Bun.serve({
+    port: config.port,
+    fetch: app.fetch,
+    websocket,
+    maxRequestBodySize: MAX_REQUEST_BODY_BYTES,
+  });
 
   // No secrets here -- just where we're listening.
   console.log(`mando hub listening on http://localhost:${server.port}`);
