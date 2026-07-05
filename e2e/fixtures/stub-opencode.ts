@@ -364,17 +364,19 @@ export async function startStubOpencode(): Promise<StubOpencode> {
     // `Session`, no envelope. Real opencode has no `title` field on the
     // request (an extra one is silently dropped) -- the server always
     // assigns its own "New session - <ISO timestamp>" title. `directory`
-    // (when the caller sends one -- see use-opencode.ts's `useCreateSession`)
-    // lands the new session in that project instead of the default.
+    // is a QUERY param, matching real opencode exactly: a body `{directory}`
+    // is silently IGNORED by the real server (verified live -- the session
+    // lands in the serve cwd's project), so the stub ignores the body too
+    // rather than papering over a caller that used the wrong placement.
     if (method === "POST" && path === "/session") {
-      const body = (await readJsonBody(req)) as { directory?: string };
+      await readJsonBody(req);
       const id = stubId("ses");
       const now = Date.now();
       const session: StubSession = {
         id,
         slug: id,
         projectID: "stub-project",
-        directory: body.directory || DEFAULT_DIRECTORY,
+        directory: url.searchParams.get("directory") || DEFAULT_DIRECTORY,
         title: `New session - ${new Date(now).toISOString()}`,
         version: "1.17.13",
         time: { created: now, updated: now },

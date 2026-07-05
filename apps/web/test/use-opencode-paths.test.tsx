@@ -253,7 +253,7 @@ describe("useOpencode hooks -> scoped to the machine's connectDirectory", () => 
     );
   });
 
-  it("useCreateSession POSTs {directory} once the machine's connectDirectory is known", async () => {
+  it("useCreateSession POSTs with ?directory= once the machine's connectDirectory is known", async () => {
     fetchMock = mockMachineAndSessionFetch();
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
@@ -268,12 +268,17 @@ describe("useOpencode hooks -> scoped to the machine's connectDirectory", () => 
       await result.current.create("ignored title");
     });
 
+    // `directory` must travel as a QUERY param: real opencode 1.17.13
+    // silently ignores a body `{directory}` and creates the session in the
+    // serve process's own cwd project (verified live), so a body-based
+    // create would land web sessions in the wrong project.
     const createCall = fetchMock.mock.calls.find(
-      ([url, init]) => (url as string) === `${PROXY}/session` && init?.method === "POST",
+      ([url, init]) =>
+        (url as string) ===
+          `${PROXY}/session?directory=${encodeURIComponent(MACHINE.connectDirectory)}` &&
+        init?.method === "POST",
     );
     expect(createCall).toBeDefined();
-    expect(JSON.parse(createCall?.[1]?.body as string)).toEqual({
-      directory: MACHINE.connectDirectory,
-    });
+    expect(JSON.parse(createCall?.[1]?.body as string)).toEqual({});
   });
 });

@@ -167,16 +167,18 @@ export function useCreateSession() {
     // Real `POST /session` has no `title` field -- the server always
     // assigns "New session - <ISO timestamp>". `_title` is accepted for
     // source compatibility with existing callers but unused. `directory`
-    // (confirmed against a live opencode 1.17.13) lands the new session in
-    // the machine's connect directory rather than the opencode server's
-    // own cwd; omitted when the machine has none.
-    return opencodeJson(backend.machineId, "/session", {
+    // must be a QUERY param, not a body field: verified against a live
+    // opencode 1.17.13 -- a body `{directory}` is silently ignored and the
+    // session lands in the serve process's own cwd project, while
+    // `?directory=` lands it in the machine's connect directory (this
+    // matches the pinned SDK's parameter placement too). Omitted when the
+    // machine has none.
+    const createPath = machine?.connectDirectory
+      ? `/session?directory=${encodeURIComponent(machine.connectDirectory)}`
+      : "/session";
+    return opencodeJson(backend.machineId, createPath, {
       method: "POST",
-      body: JSON.stringify(
-        machine?.connectDirectory
-          ? { directory: machine.connectDirectory }
-          : {},
-      ),
+      body: JSON.stringify({}),
     });
   };
 }

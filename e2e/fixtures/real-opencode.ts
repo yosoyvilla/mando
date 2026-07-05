@@ -27,7 +27,7 @@
 // spawning it via child_process is runtime-agnostic.
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer } from "node:net";
-import { mkdtempSync, realpathSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { waitFor, waitForExit } from "./proc-utils";
@@ -55,9 +55,9 @@ export interface RealHandoffState {
   // session's `directory` as the resolved path, so an unresolved tmpdir()
   // value would never match a `?directory=` filter.
   directory: string;
-  // A session created by talking to opencode DIRECTLY via `opencode run`
-  // (the "terminal" client), before the machine came online -- the thing
-  // the handoff test must find again through the hub proxy.
+  // A session created by talking to opencode DIRECTLY (the "terminal"
+  // client), before the machine came online -- the thing the handoff test
+  // must find again through the hub proxy.
   terminalSessionId: string;
   // The exact text sent as the terminal's message -- specs assert this
   // comes back through `GET /session/:id/message` via the proxy, which is
@@ -88,14 +88,22 @@ export interface RealOpencode {
   // The resolved directory the server runs in -- see RealHandoffState's
   // `directory` doc comment above.
   directory: string;
-  // Creates a session the way a REAL terminal user does: `opencode run
-  // <message>` in the same directory the server is scoped to. CI has no
-  // provider key configured, so the run's model call is expected to fail
-  // (nonzero exit) -- that's fine, the session and its user message are
-  // persisted before/regardless of the provider call (verified in
-  // production debugging: a provider-401 session still stored its user
-  // message). Returns the id opencode assigned once the session is
-  // discoverable via `GET /session?directory=<directory>`.
+  // Creates a session in the TERMINAL-VISIBLE store (the `message` table
+  // the unprefixed API family reads -- the exact store a plain-TUI user's
+  // sessions live in) and persists one user message into it, without any
+  // model/provider involvement: `POST /session?directory=` + `POST
+  // /session/:id/message {noReply:true}` (both verified against a live
+  // opencode 1.17.13; `directory` MUST be a query param -- a body field is
+  // silently ignored and the session lands in the serve cwd's project).
+  //
+  // Deliberately NOT `opencode run <message>`: with any ambient provider
+  // credentials (env/keychain) that spawns a real autonomous agent -- in a
+  // local run it started reading the repo and burning provider credits --
+  // and with none it exits nonzero on a timing-dependent path. The
+  // noReply flow writes to the same store deterministically. (That
+  // `opencode run` sessions land in this store was verified manually in
+  // production debugging: a live TUI session served 30 messages through
+  // this same endpoint.)
   createTerminalSession(message: string): Promise<string>;
   stop(): Promise<void>;
 }
@@ -131,10 +139,27 @@ export async function startRealOpencode(): Promise<RealOpencode> {
   // later `?directory=` filter).
   const cwd = realpathSync(mkdtempSync(join(tmpdir(), "mando-real-oc-")));
 
+  // Hermetic HOME: both `serve` and `run` below get a fresh HOME inside the
+  // temp dir instead of the developer's real one. Ambient opencode config
+  // (~/.config/opencode plugins, custom agents) otherwise leaks into the
+  // harness -- observed locally: a plugin-heavy user config made
+  // `opencode run` hang past its kill timeout, so the terminal session never
+  // appeared. CI runners have a near-empty HOME, which is exactly the
+  // environment this recreates; the two processes still share one store
+  // because they share this HOME.
+  const home = join(cwd, "home");
+  mkdirSync(home, { recursive: true });
+  const hermeticEnv = {
+    ...process.env,
+    HOME: home,
+    XDG_CONFIG_HOME: join(home, ".config"),
+    XDG_DATA_HOME: join(home, ".local", "share"),
+  };
+
   const proc: ChildProcess = spawn(
     bin,
     ["serve", "--port", String(port), "--hostname", "127.0.0.1"],
-    { cwd, stdio: ["ignore", "pipe", "pipe"] },
+    { cwd, stdio: ["ignore", "pipe", "pipe"], env: hermeticEnv },
   );
 
   // Capture opencode's own stdout/stderr (bounded tail). With stdio:inherit
@@ -193,68 +218,47 @@ export async function startRealOpencode(): Promise<RealOpencode> {
     port,
     directory: cwd,
     async createTerminalSession(message: string) {
-      const runProc: ChildProcess = spawn(bin, ["run", message], {
-        cwd,
-        stdio: ["ignore", "pipe", "pipe"],
-        env: { ...process.env },
-      });
-
-      let runOutput = "";
-      const captureRun = (chunk: Buffer) => {
-        runOutput = (runOutput + chunk.toString()).slice(-4000);
-      };
-      runProc.stdout?.on("data", captureRun);
-      runProc.stderr?.on("data", captureRun);
-
-      // `opencode run` needs a model; CI has no provider key configured, so
-      // the run's model call is expected to fail (nonzero exit) -- that is
-      // FINE, the session and its user message are persisted before/
-      // regardless of the provider call (see this file's module comment
-      // and RealOpencode's `createTerminalSession` doc comment). Bounded so
-      // a genuinely stuck run (e.g. something waiting on a TTY that isn't
-      // there) cannot hang the harness: it is killed and treated the same
-      // as a fast provider failure, since the session should already exist
-      // by the time any model call would even start.
-      const RUN_TIMEOUT_MS = 30_000;
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(() => {
-          runProc.kill("SIGTERM");
-        }, RUN_TIMEOUT_MS);
-        runProc.once("exit", () => {
-          clearTimeout(timer);
-          resolve();
-        });
-        runProc.once("error", () => {
-          clearTimeout(timer);
-          resolve();
-        });
-      });
-
+      // See the RealOpencode doc comment for why this is HTTP + noReply
+      // rather than `opencode run`.
       const directoryParam = encodeURIComponent(cwd);
-      let sessionId: string | null = null;
-      try {
-        await waitFor(
-          async () => {
-            const res = await fetch(`http://127.0.0.1:${port}/session?directory=${directoryParam}`);
-            if (!res.ok) return false;
-            const list = (await res.json()) as Array<{ id: string; time: { created: number } }>;
-            if (list.length === 0) return false;
-            sessionId = list.reduce((newest, s) => (s.time.created > newest.time.created ? s : newest)).id;
-            return true;
-          },
-          20_000,
-          `real opencode session for directory ${cwd} to appear after "opencode run"`,
+      const createRes = await fetch(`http://127.0.0.1:${port}/session?directory=${directoryParam}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
+      if (!createRes.ok) {
+        throw new Error(`real opencode POST /session?directory= failed with status ${createRes.status}`);
+      }
+      const created = (await createRes.json()) as { id?: string; directory?: string };
+      if (!created.id) throw new Error("real opencode POST /session returned no session id");
+      if (created.directory !== cwd) {
+        throw new Error(
+          `real opencode created the session in "${created.directory}" instead of "${cwd}" -- ` +
+            "the ?directory= query param contract changed",
         );
-      } catch (error) {
-        const base = error instanceof Error ? error.message : String(error);
-        const detail = runOutput.trim()
-          ? `\n--- opencode run output (tail) ---\n${runOutput.trim()}`
-          : " (opencode run produced no output before the timeout)";
-        throw new Error(`${base}${detail}`);
       }
 
-      if (!sessionId) throw new Error("real opencode run produced no discoverable session id");
-      return sessionId;
+      const messageRes = await fetch(`http://127.0.0.1:${port}/session/${created.id}/message`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ noReply: true, parts: [{ type: "text", text: message }] }),
+      });
+      if (!messageRes.ok) {
+        throw new Error(
+          `real opencode POST /session/:id/message (noReply) failed with status ${messageRes.status}`,
+        );
+      }
+
+      // Read-back guard: the message must be servable through the same
+      // unprefixed endpoint the web uses -- this is the exact production
+      // bug the suite exists to catch (session visible, messages empty).
+      const readBack = await fetch(`http://127.0.0.1:${port}/session/${created.id}/message`);
+      const entries = (await readBack.json()) as OpencodeMessageEntry[];
+      if (!entries.some((entry) => opencodeMessageText(entry).includes(message))) {
+        throw new Error("terminal message did not read back through GET /session/:id/message");
+      }
+
+      return created.id;
     },
     async stop() {
       proc.kill("SIGTERM");
