@@ -3,31 +3,26 @@ import { useMachineStore } from "@/stores/machine-store";
 import { opencodeJson, opencodeRequest } from "@/lib/opencode-fetch";
 import { hubClient as defaultHubClient } from "@/lib/hub-client-instance";
 import type { HubClient, Machine } from "@/lib/hub-client";
-import type { SessionStatus } from "@opencode-ai/sdk/v2";
+import type { Session, SessionStatus } from "@opencode-ai/sdk/v2";
 
 function useBackend() {
   const machineId = useMachineStore((s) => s.selectedMachineId);
   return machineId ? { machineId } : null;
 }
 
-// `path` is a REAL opencode HTTP path (e.g. "/api/session"), forwarded
-// verbatim to the machine's local opencode server by the hub's per-machine
-// proxy (apps/hub/src/proxy/routes.ts does no path rewriting). Untyped
-// (matches the old fetcher's implicit `res.json(): any`) so each
-// `useSWR<T>` call site can pin its own response shape.
+// `path` is a REAL opencode HTTP path (e.g. "/session"), forwarded verbatim
+// to the machine's local opencode server by the hub's per-machine proxy
+// (apps/hub/src/proxy/routes.ts does no path rewriting). Every path this
+// hook file uses is opencode's UNPREFIXED endpoint family -- the one that
+// also serves sessions created by a plain `opencode` TUI, not just
+// server-created ones (`/api/*`) -- and none of them wrap their payload in
+// an envelope, so a single untyped fetcher (matching the old fetcher's
+// implicit `res.json(): any`) covers every GET here; each `useSWR<T>` call
+// site pins its own response shape.
 function fetcher([machineId, path]: readonly [string, string]): Promise<any> {
   return opencodeJson(machineId, path);
 }
 
-// Most opencode `/api/*` GET endpoints wrap their payload in `{ data: ... }`
-// -- confirmed against a live `opencode serve` 1.17.13 via its /doc OpenAPI
-// spec and live curls (see .superpowers/sdd/opencode-api-fix-report.md).
-// `/config/providers` is the one path used here that has no /api prefix and
-// no envelope, so unwrapping is opt-in per hook rather than built into the
-// shared `fetcher`.
-// Untyped (matches `fetcher`'s implicit `res.json(): any`) so each
-// `useSWR<T>` call site can pin its own response shape, same convention as
-// the shared `fetcher` above.
 // `/vcs/diff/raw` (unlike every other path this hook file touches) responds
 // with a raw `text/x-diff` body, not JSON -- `opencodeJson`'s `res.json()`
 // would throw `SyntaxError: Unexpected token 'd', "diff --gi"...` on it.
@@ -44,9 +39,40 @@ async function rawDiffFetcher(
   return { diff: await res.text() };
 }
 
-async function dataFetcher([machineId, path]: readonly [string, string]): Promise<any> {
-  const body = await opencodeJson<{ data: unknown }>(machineId, path);
-  return body.data;
+// `GET /session` is scoped to a project directory via `?directory=<abs
+// path>` -- omitting it serves the opencode server's own cwd project
+// instead of the machine's connect directory. Shared with
+// use-opencode-events.ts so its SSE-driven `mutate(sessionsKey(...))` calls
+// target the exact same SWR key tuple `useSessions` subscribes with.
+export function sessionsPath(connectDirectory?: string | null): string {
+  return connectDirectory
+    ? `/session?directory=${encodeURIComponent(connectDirectory)}`
+    : "/session";
+}
+
+// Newest-first, matching Claude Code /rc's "what am I working on right now"
+// framing -- the sidebar pins index 0 as the Live session. Shared with
+// use-opencode-events.ts so an event-driven cache update (session.created/
+// session.updated) re-sorts with the exact same comparator the initial
+// fetch below uses, keeping the Live pin stable across both paths.
+export function sortSessions(sessions: Session[]): Session[] {
+  return [...sessions].sort(
+    (a, b) =>
+      (b.time.updated ?? b.time.created) - (a.time.updated ?? a.time.created),
+  );
+}
+
+// `GET /session`'s response is a bare array on real opencode (see
+// `sessionsPath` above), but this hook file's generic `fetcher` types every
+// GET as `any` -- so a dedicated fetcher is needed here to sort without
+// affecting the other untyped consumers. Defensive `Array.isArray` guard:
+// an unexpected non-array response (or a test double standing in for one)
+// passes through unsorted rather than throwing inside the SWR fetch chain.
+async function sessionsFetcher(
+  [machineId, path]: readonly [string, string],
+): Promise<Session[]> {
+  const data = await opencodeJson<unknown>(machineId, path);
+  return Array.isArray(data) ? sortSessions(data as Session[]) : (data as Session[]);
 }
 
 export function useMachines(client: HubClient = defaultHubClient) {
@@ -67,43 +93,27 @@ export function useSelectedMachine() {
 
 export function useSessions() {
   const backend = useBackend();
+  const machine = useSelectedMachine();
+  const path = sessionsPath(machine?.connectDirectory);
 
   return useSWR(
-    backend ? ([backend.machineId, "/api/session"] as const) : null,
-    dataFetcher,
+    backend ? ([backend.machineId, path] as const) : null,
+    sessionsFetcher,
   );
 }
 
-// `/api/session/active` only reports sessions that are *currently running*:
-// `{ data: { [sessionID]: { type: "running" } } }`. There is no "idle"
-// entry for a quiet session -- it's simply absent from the map. Map
-// presence -> "busy" so downstream code (`$id.tsx`'s
-// `sessionStatus?.type === "busy"` check) keeps working; SSE's
-// `session.next.retried` / `session.idle` handlers in use-opencode-events.ts
-// refine an open session's status further once messages start streaming.
-async function fetchSessionStatuses(
-  machineId: string,
-  path: string,
-): Promise<Record<string, SessionStatus>> {
-  const body = await opencodeJson<{ data: Record<string, { type: "running" }> }>(
-    machineId,
-    path,
-  );
-  return Object.fromEntries(
-    Object.keys(body.data).map((sessionID) => [
-      sessionID,
-      { type: "busy" as const },
-    ]),
-  );
-}
-
+// `GET /session/status` responds `{ [sessionID]: SessionStatus }` directly
+// (no envelope) -- confirmed against a live opencode 1.17.13. Its idle
+// response is `{}`; a quiet session is simply absent from the map rather
+// than carrying an explicit `{ type: "idle" }` entry, so downstream reads
+// (`$id.tsx`'s `sessionStatus?.type === "busy"` check, the `refreshInterval`
+// below) must treat absence as "not busy" defensively.
 export function useSessionStatuses() {
   const backend = useBackend();
 
   return useSWR<Record<string, SessionStatus>>(
-    backend ? ([backend.machineId, "/api/session/active"] as const) : null,
-    ([machineId, path]: readonly [string, string]) =>
-      fetchSessionStatuses(machineId, path),
+    backend ? ([backend.machineId, "/session/status"] as const) : null,
+    fetcher,
     {
       revalidateOnFocus: false,
       refreshInterval: (statuses) =>
@@ -149,21 +159,27 @@ export function useAgents() {
 
 export function useCreateSession() {
   const backend = useBackend();
+  const machine = useSelectedMachine();
 
   return async (_title?: string): Promise<any> => {
     if (!backend) throw new Error("No machine selected");
 
-    // Real `POST /api/session` has no `title` field (its request schema is
-    // `additionalProperties:false` over `{id?, agent?, model?, location?}`,
-    // and empirically an extra `title` key is silently dropped) -- the
-    // server always assigns "New session - <ISO timestamp>". `_title` is
-    // accepted for source compatibility with existing callers but unused.
-    const body = await opencodeJson<{ data: unknown }>(
-      backend.machineId,
-      "/api/session",
-      { method: "POST", body: JSON.stringify({}) },
-    );
-    return body.data;
+    // Real `POST /session` has no `title` field -- the server always
+    // assigns "New session - <ISO timestamp>". `_title` is accepted for
+    // source compatibility with existing callers but unused. `directory`
+    // must be a QUERY param, not a body field: verified against a live
+    // opencode 1.17.13 -- a body `{directory}` is silently ignored and the
+    // session lands in the serve process's own cwd project, while
+    // `?directory=` lands it in the machine's connect directory (this
+    // matches the pinned SDK's parameter placement too). Omitted when the
+    // machine has none.
+    const createPath = machine?.connectDirectory
+      ? `/session?directory=${encodeURIComponent(machine.connectDirectory)}`
+      : "/session";
+    return opencodeJson(backend.machineId, createPath, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
   };
 }
 
@@ -290,12 +306,11 @@ export function useAbortSession() {
   return async (sessionId: string): Promise<any> => {
     if (!backend) throw new Error("No machine selected");
 
-    // Real opencode calls this "interrupt", not "abort" (verified via
-    // /doc); `/session/:id/abort` doesn't exist on either API surface.
-    return opencodeJson(
-      backend.machineId,
-      `/api/session/${sessionId}/interrupt`,
-      { method: "POST" },
-    );
+    // The unprefixed `/session/:id/abort` (confirmed against a live
+    // opencode 1.17.13) replaces the `/api/*` family's
+    // `/api/session/:id/interrupt`.
+    return opencodeJson(backend.machineId, `/session/${sessionId}/abort`, {
+      method: "POST",
+    });
   };
 }

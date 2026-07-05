@@ -23,16 +23,19 @@ import {
   useReplyPermission,
   useReplyQuestion,
   useRejectQuestion,
+  useSelectedMachine,
 } from "../src/hooks/use-opencode";
 import { useMachineStore } from "../src/stores/machine-store";
 
 // Regression guard tying every opencode DATA-LAYER OPERATION to the exact
 // real opencode path it hits, observed at the wire via the hub proxy URL
 // (`/api/v1/machines/<id>/opencode/<realpath>`). These use the real
-// `createHubClient` singleton with a mocked global fetch. If anyone reverts a
-// path to the old invented vocabulary (`/sessions`, `/session/create`,
-// `/session/status`, `/agents`, `/providers`, `/git/diff`, `/session/:id/abort`
-// ...), the asserted URL changes and the test fails.
+// `createHubClient` singleton with a mocked global fetch. opencode 1.17.13
+// has TWO endpoint families: `/api/*` only serves sessions created through
+// the server, while the UNPREFIXED family (`/session`, `/session/status`,
+// `/session/:id/abort`, ...) also serves sessions created by a plain
+// `opencode` TUI -- the primary use case here. If anyone reverts a path back
+// to the `/api/*` family, the asserted URL changes and the test fails.
 
 const PROXY = "/api/v1/machines/m1/opencode";
 
@@ -68,17 +71,20 @@ afterEach(() => {
   useMachineStore.setState({ selectedMachineId: null });
 });
 
-function firstUrl(): string {
-  return fetchMock.mock.calls[0][0] as string;
+function findCall(url: string) {
+  return fetchMock.mock.calls.find(([callUrl]) => callUrl === url);
 }
 
 describe("useOpencode GET hooks -> real opencode paths", () => {
   const cases: Array<{ name: string; hook: () => unknown; path: string }> = [
-    { name: "useSessions", hook: () => useSessions(), path: "/api/session" },
+    // No machine list is mocked in this suite, so `useSelectedMachine()`
+    // resolves to `null` and the session list omits `?directory=` -- the
+    // directory-scoped case is covered separately below.
+    { name: "useSessions", hook: () => useSessions(), path: "/session" },
     {
       name: "useSessionStatuses",
       hook: () => useSessionStatuses(),
-      path: "/api/session/active",
+      path: "/session/status",
     },
     { name: "useAgents", hook: () => useAgents(), path: "/agent" },
     {
@@ -93,20 +99,24 @@ describe("useOpencode GET hooks -> real opencode paths", () => {
 
   for (const { name, hook, path } of cases) {
     it(`${name} GETs ${PROXY}${path}`, async () => {
+      const url = `${PROXY}${path}`;
       renderHook(hook, { wrapper });
-      await waitFor(() => expect(fetchMock).toHaveBeenCalled());
-      expect(firstUrl()).toBe(`${PROXY}${path}`);
+      // `useSessions`/`useSessionStatuses` also compose `useSelectedMachine()`,
+      // which fires its own `/api/v1/machines` fetch -- match on the exact
+      // proxied URL rather than call order so that doesn't race this
+      // assertion.
+      await waitFor(() => expect(findCall(url)).toBeDefined());
       // GET: no explicit method override on the SWR fetcher path.
-      const init = (fetchMock.mock.calls[0][1] ?? {}) as RequestInit;
+      const init = (findCall(url)?.[1] ?? {}) as RequestInit;
       expect(init.method).toBeUndefined();
     });
   }
 });
 
 describe("useOpencode mutation hooks -> real opencode paths", () => {
-  it("useCreateSession POSTs an empty body to /api/session", async () => {
+  it("useCreateSession POSTs an empty body to /session (no machine directory known)", async () => {
     fetchMock = mock<FetchFn>(() =>
-      Promise.resolve(jsonResponse({ data: { id: "ses_1" } })),
+      Promise.resolve(jsonResponse({ id: "ses_1" })),
     );
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
@@ -115,14 +125,20 @@ describe("useOpencode mutation hooks -> real opencode paths", () => {
       await result.current("ignored title");
     });
 
-    const [url, init = {}] = fetchMock.mock.calls[0];
-    expect(url).toBe(`${PROXY}/api/session`);
-    expect(init.method).toBe("POST");
-    // Real POST /api/session has no `title` field -- body is always `{}`.
-    expect(JSON.parse(init.body as string)).toEqual({});
+    // `useCreateSession` also composes `useSelectedMachine()`, which fires
+    // its own `/api/v1/machines` fetch -- match on the POST rather than call
+    // order so that doesn't race this assertion.
+    const createCall = fetchMock.mock.calls.find(
+      ([callUrl, callInit]) =>
+        (callUrl as string) === `${PROXY}/session` && callInit?.method === "POST",
+    );
+    expect(createCall).toBeDefined();
+    // No connectDirectory is known in this suite (no machine list mocked) --
+    // body is `{}`. See the directory-scoped case below for the populated one.
+    expect(JSON.parse(createCall?.[1]?.body as string)).toEqual({});
   });
 
-  it("useDeleteSession DELETEs the legacy /session/:id (not /api/session/:id)", async () => {
+  it("useDeleteSession DELETEs the unprefixed /session/:id", async () => {
     fetchMock = mock<FetchFn>(() => Promise.resolve(jsonResponse(true)));
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
@@ -136,8 +152,8 @@ describe("useOpencode mutation hooks -> real opencode paths", () => {
     expect(init.method).toBe("DELETE");
   });
 
-  it("useAbortSession POSTs to /api/session/:id/interrupt (opencode's name for abort)", async () => {
-    fetchMock = mock<FetchFn>(() => Promise.resolve(jsonResponse({})));
+  it("useAbortSession POSTs to /session/:id/abort (unprefixed family)", async () => {
+    fetchMock = mock<FetchFn>(() => Promise.resolve(jsonResponse(true)));
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
     const { result } = renderHook(() => useAbortSession(), { wrapper });
@@ -146,7 +162,7 @@ describe("useOpencode mutation hooks -> real opencode paths", () => {
     });
 
     const [url, init = {}] = fetchMock.mock.calls[0];
-    expect(url).toBe(`${PROXY}/api/session/ses_9/interrupt`);
+    expect(url).toBe(`${PROXY}/session/ses_9/abort`);
     expect(init.method).toBe("POST");
   });
 
@@ -195,5 +211,74 @@ describe("useOpencode mutation hooks -> real opencode paths", () => {
     const [url, init = {}] = fetchMock.mock.calls[0];
     expect(url).toBe(`${PROXY}/question/q_1/reject`);
     expect(init.method).toBe("POST");
+  });
+});
+
+describe("useOpencode hooks -> scoped to the machine's connectDirectory", () => {
+  const MACHINE = {
+    id: "m1",
+    name: "laptop",
+    platform: "darwin",
+    online: true,
+    lastSeenAt: null,
+    revokedAt: null,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    connectDirectory: "/Users/dev/project",
+  };
+
+  function mockMachineAndSessionFetch() {
+    return mock<FetchFn>((url: string) => {
+      if (url === "/api/v1/machines") {
+        return Promise.resolve(jsonResponse({ machines: [MACHINE] }));
+      }
+      return Promise.resolve(jsonResponse([]));
+    });
+  }
+
+  it("useSessions GETs /session?directory=<connectDirectory> once the machine is known", async () => {
+    fetchMock = mockMachineAndSessionFetch();
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    renderHook(() => useSessions(), { wrapper });
+
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([url]) => (url as string).includes("/opencode/session?"))).toBe(true),
+    );
+
+    const sessionCall = fetchMock.mock.calls.find(([url]) =>
+      (url as string).includes("/opencode/session?"),
+    );
+    expect(sessionCall?.[0]).toBe(
+      `${PROXY}/session?directory=${encodeURIComponent(MACHINE.connectDirectory)}`,
+    );
+  });
+
+  it("useCreateSession POSTs with ?directory= once the machine's connectDirectory is known", async () => {
+    fetchMock = mockMachineAndSessionFetch();
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const { result } = renderHook(
+      () => ({ create: useCreateSession(), machine: useSelectedMachine() }),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current.machine).not.toBeNull());
+
+    await act(async () => {
+      await result.current.create("ignored title");
+    });
+
+    // `directory` must travel as a QUERY param: real opencode 1.17.13
+    // silently ignores a body `{directory}` and creates the session in the
+    // serve process's own cwd project (verified live), so a body-based
+    // create would land web sessions in the wrong project.
+    const createCall = fetchMock.mock.calls.find(
+      ([url, init]) =>
+        (url as string) ===
+          `${PROXY}/session?directory=${encodeURIComponent(MACHINE.connectDirectory)}` &&
+        init?.method === "POST",
+    );
+    expect(createCall).toBeDefined();
+    expect(JSON.parse(createCall?.[1]?.body as string)).toEqual({});
   });
 });

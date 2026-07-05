@@ -18,7 +18,11 @@ export default defineConfig({
   testMatch: "**/real-opencode-*.spec.ts",
   // A little longer than the default: booting a real opencode server and
   // waiting for the async user-message recording is slower than the stub.
-  timeout: 45_000,
+  // Also covers a real server occasionally taking a while to admit a NEW
+  // message into a session whose first turn (from the terminal's own
+  // `opencode run`) is still in flight -- a real model call, even a fast
+  // provider-auth failure, is not instant.
+  timeout: 90_000,
   fullyParallel: false,
   workers: 1,
   retries: 0,

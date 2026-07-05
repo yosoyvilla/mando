@@ -74,7 +74,7 @@ export function useSessionMessages(sessionId: string | undefined) {
   const backend = useBackend();
   const key =
     backend && sessionId
-      ? ([backend.machineId, `/api/session/${sessionId}/message`] as const)
+      ? ([backend.machineId, `/session/${sessionId}/message`] as const)
       : null;
 
   const {
@@ -102,7 +102,7 @@ export function useSessionMessages(sessionId: string | undefined) {
 }
 
 export function getMessagesKey(machineId: string, sessionId: string) {
-  return [machineId, `/api/session/${sessionId}/message`] as const;
+  return [machineId, `/session/${sessionId}/message`] as const;
 }
 
 export function mutateSessionMessages(machineId: string, sessionId: string) {
@@ -129,10 +129,12 @@ export function sortSessionMessages(messages: SessionMessage[]) {
 }
 
 function normalizeFetchedMessages(data: unknown) {
-  // Real opencode wraps `GET /api/session/:id/message` as
-  // `{ data: SessionMessage[], cursor }` (confirmed via /doc + live curl
-  // against opencode 1.17.13). The `items` fallback below predates that
-  // verification and is kept only for defensiveness against older shapes.
+  // The unprefixed `GET /session/:id/message` (confirmed against a live
+  // opencode 1.17.13) returns a BARE ARRAY of `{info, parts}` objects --
+  // this is now the primary shape, handled below by `isMessageWithParts` +
+  // `legacyMessageToSessionMessage`. The `{data:[...]}`/`{items:[...]}`
+  // envelope fallbacks are kept only for defensiveness against the `/api/*`
+  // family's response shape.
   const messages = Array.isArray(data)
     ? data
     : isRecord(data) && Array.isArray(data.data)

@@ -147,6 +147,71 @@ describe("runDaemon", () => {
     expect(existsSync(pidFile)).toBe(false);
   });
 
+  it("omits connectDirectory from the hello frame when none was given", async () => {
+    const sockets: FakeSocket[] = [];
+    const controller = new AbortController();
+
+    const daemonPromise = runDaemon({
+      hubUrl: "http://hub.invalid",
+      token: "tok-nodir",
+      machineName: "machine-nodir",
+      opencodePort: 4096,
+      pidFile: newPidFile(),
+      errorFile: newErrorFile(),
+      wsFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+      checkHealth: async () => true,
+      healthCheckIntervalMs: 1_000_000,
+      signal: controller.signal,
+    });
+
+    sockets[0]!.triggerOpen();
+    const hello = sentFrames(sockets[0]!)[0];
+    expect(hello?.type).toBe("hello");
+    if (hello?.type === "hello") {
+      expect(hello.payload.connectDirectory).toBeUndefined();
+    }
+
+    controller.abort();
+    await daemonPromise;
+  });
+
+  it("includes connectDirectory in the hello frame when one was given (--connect-dir)", async () => {
+    const sockets: FakeSocket[] = [];
+    const controller = new AbortController();
+
+    const daemonPromise = runDaemon({
+      hubUrl: "http://hub.invalid",
+      token: "tok-dir",
+      machineName: "machine-dir",
+      opencodePort: 4096,
+      connectDirectory: "/Users/dev/my-project",
+      pidFile: newPidFile(),
+      errorFile: newErrorFile(),
+      wsFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+      checkHealth: async () => true,
+      healthCheckIntervalMs: 1_000_000,
+      signal: controller.signal,
+    });
+
+    sockets[0]!.triggerOpen();
+    const hello = sentFrames(sockets[0]!)[0];
+    expect(hello).toMatchObject({
+      type: "hello",
+      payload: { connectDirectory: "/Users/dev/my-project" },
+    });
+
+    controller.abort();
+    await daemonPromise;
+  });
+
   it("forwards http_request frames to the local opencode stub and streams the response back", async () => {
     stubOpencode = Bun.serve({
       port: 0,

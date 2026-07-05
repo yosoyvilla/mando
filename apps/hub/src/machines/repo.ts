@@ -30,6 +30,20 @@ export async function getMachine(sql: Sql, id: string): Promise<Machine | null> 
   return (rows[0] as Machine) ?? null;
 }
 
+// Persists the directory `mando connect` was run from (see @mando/protocol's
+// HelloFrame.payload.connectDirectory) onto the machine row, so
+// machines/routes.ts's serializeMachine() can expose it to the web UI for
+// scoping opencode sessions. Called from tunnel/ws.ts's handleHello on
+// every hello, not just the first -- the same machine can reconnect after
+// `mando connect` was re-run from a different directory, and this column
+// has no history, only "most recently seen". The caller (handleHello) only
+// invokes this when the incoming hello actually carries a connectDirectory
+// -- an old agent build that omits the field leaves the existing value on
+// the row untouched rather than clobbering it back to null.
+export async function setConnectDirectory(sql: Sql, id: string, connectDirectory: string): Promise<void> {
+  await sql`update machines set connect_directory = ${connectDirectory} where id = ${id}`;
+}
+
 export async function revokeMachine(sql: Sql, id: string): Promise<void> {
   // Both updates must land together -- a machine that's revoked but whose
   // tokens are still live (or vice versa) would let a "revoked" machine

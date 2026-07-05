@@ -27,6 +27,7 @@ function machine(overrides: Partial<Machine>): Machine {
     lastSeenAt: null,
     revokedAt: null,
     createdAt: "2026-01-01T00:00:00.000Z",
+    connectDirectory: null,
     ...overrides,
   };
 }

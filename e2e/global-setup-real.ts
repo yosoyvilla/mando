@@ -114,10 +114,18 @@ async function waitForHubHealthy(): Promise<void> {
 // Seeds a machine/token owned by the admin, then runs a real
 // `mando connect --opencode-port <REAL opencode port>` against an isolated
 // MANDO_CONFIG. The only difference from global-setup.ts is the port it
-// forwards to -- a genuine `opencode serve`, not the stub. Returns the
-// machineId and the daemon pidfile so teardown can stop it.
+// forwards to -- a genuine `opencode serve`, not the stub -- and the cwd
+// the subprocess runs from: `connect()` always carries its OWN
+// `process.cwd()` through to the daemon's hello frame as connectDirectory
+// (see packages/agent/src/connect.ts's defaultSpawnDaemon), so running it
+// from `connectDir` (the same directory the real opencode server and the
+// terminal session both use) is what makes the seeded machine's
+// connectDirectory match the directory the web UI/specs scope the session
+// list to. Returns the machineId and the daemon pidfile so teardown can
+// stop it.
 async function bringMachineOnline(
   opencodePort: number,
+  connectDir: string,
   tmpDir: string,
 ): Promise<{ machineId: string; pidFile: string }> {
   const seeded = await seedMachineViaSubprocess(REAL_MACHINE_NAME, ADMIN_EMAIL);
@@ -135,7 +143,7 @@ async function bringMachineOnline(
   await runToCompletion(
     "bun",
     [join(REPO_ROOT, "packages/agent/src/index.ts"), "connect", "--opencode-port", String(opencodePort)],
-    REPO_ROOT,
+    connectDir,
     {
       ...process.env,
       MANDO_CONFIG: configPath,
@@ -166,12 +174,14 @@ export default async function globalSetup(_config: FullConfig): Promise<() => Pr
   try {
     opencode = await startRealOpencode();
 
-    // The "terminal" client: create a session by hitting real opencode
-    // directly, BEFORE the machine is online, so the handoff test proves
-    // rediscovery of a pre-existing session rather than one it made itself.
-    const terminalSessionId = await opencode.createSession();
+    // The "terminal" client: create a session the way a real terminal user
+    // does, via `opencode run`, BEFORE the machine is online, so the
+    // handoff test proves rediscovery of a pre-existing TUI-store session
+    // rather than one it made itself through the server API.
+    const terminalMessageText = `mando e2e terminal handoff ${crypto.randomUUID().slice(0, 8)}`;
+    const terminalSessionId = await opencode.createTerminalSession(terminalMessageText);
 
-    const { machineId, pidFile } = await bringMachineOnline(opencode.port, tmpDir);
+    const { machineId, pidFile } = await bringMachineOnline(opencode.port, opencode.directory, tmpDir);
 
     const cookie = await loginForCookie(HUB_BASE_URL, ADMIN_EMAIL, ADMIN_PASSWORD);
     await waitFor(
@@ -188,7 +198,9 @@ export default async function globalSetup(_config: FullConfig): Promise<() => Pr
           machineId,
           machineName: REAL_MACHINE_NAME,
           opencodePort: opencode.port,
+          directory: opencode.directory,
           terminalSessionId,
+          terminalMessageText,
         },
         null,
         2,

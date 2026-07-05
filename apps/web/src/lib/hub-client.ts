@@ -22,6 +22,7 @@ export type Machine = {
   lastSeenAt: string | null;
   revokedAt: string | null;
   createdAt: string;
+  connectDirectory: string | null;
 };
 
 export class HubClientError extends Error {
