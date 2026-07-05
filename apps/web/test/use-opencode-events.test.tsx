@@ -15,14 +15,16 @@ import { useSessionMessages } from "../src/hooks/use-session-messages";
 import { useMachineStore } from "../src/stores/machine-store";
 
 // Locks the SSE layer to the REAL opencode 1.17.13 wire contract:
-//   - frames are `data: {"id","type","data":{...}}` (payload field is `data`,
-//     NOT the stale SDK 1.14.41 `properties`),
-//   - the stream is opened at the real `/api/event` path,
+//   - frames are `data: {"id","type","properties":{...}}` (payload field is
+//     `properties`, matching the installed SDK's `Event` type -- the earlier
+//     belief that the live server sent `.data` was wrong),
+//   - the stream is opened at the real unprefixed `/event` path (`/api/event`
+//     only serves the server-created-session store),
 //   - `applyEvent` dispatches on the real event `type` names and reads fields
-//     out of `.data`.
-// If anyone reverts the payload field to `.properties` or renames an event
-// case, feeding a real-shaped frame no longer updates the cache and these
-// tests fail.
+//     out of `.properties`.
+// If anyone reverts the payload field to `.data` or renames an event case,
+// feeding a real-shaped frame no longer updates the cache and these tests
+// fail.
 
 const PROXY = "/api/v1/machines/m1/opencode";
 const SEED = {
@@ -62,8 +64,8 @@ class FakeEventSource {
   }
 
   static eventStream(): FakeEventSource {
-    const es = FakeEventSource.instances.find((i) => i.url.endsWith("/api/event"));
-    if (!es) throw new Error("no /api/event EventSource opened");
+    const es = FakeEventSource.instances.find((i) => i.url.endsWith("/opencode/event"));
+    if (!es) throw new Error("no /event EventSource opened");
     return es;
   }
 }
@@ -107,12 +109,12 @@ beforeEach(async () => {
   globalThis.fetch = mock((url: string) => {
     if (url.includes("/message")) {
       messageFetches += 1;
-      return Promise.resolve(jsonResponse({ data: [] }));
+      return Promise.resolve(jsonResponse([]));
     }
-    if (url === `${PROXY}/api/session`) {
-      return Promise.resolve(jsonResponse({ data: [SEED] }));
+    if (url === `${PROXY}/session`) {
+      return Promise.resolve(jsonResponse([SEED]));
     }
-    return Promise.resolve(jsonResponse({ data: {} }));
+    return Promise.resolve(jsonResponse({}));
   }) as unknown as typeof fetch;
 });
 
@@ -124,16 +126,16 @@ afterEach(async () => {
 });
 
 describe("useOpencodeEvents", () => {
-  it("opens the SSE stream at the real /api/event path with credentials", async () => {
+  it("opens the SSE stream at the real unprefixed /event path with credentials", async () => {
     renderHook(useHarness, { wrapper });
     await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
 
     const es = FakeEventSource.eventStream();
-    expect(es.url).toBe(`${PROXY}/api/event`);
+    expect(es.url).toBe(`${PROXY}/event`);
     expect(es.opts).toEqual({ withCredentials: true });
   });
 
-  it("applies a real `session.created` frame (payload under `.data`)", async () => {
+  it("applies a real `session.created` frame (payload under `.properties`)", async () => {
     const { result } = renderHook(useHarness, { wrapper });
     await waitFor(() =>
       expect(result.current.sessions.data).toEqual([SEED]),
@@ -143,7 +145,7 @@ describe("useOpencodeEvents", () => {
       FakeEventSource.eventStream().emit({
         id: "evt_1",
         type: "session.created",
-        data: {
+        properties: {
           sessionID: "ses_new",
           info: { id: "ses_new", title: "new", time: { created: 2, updated: 2 } },
         },
@@ -158,7 +160,7 @@ describe("useOpencodeEvents", () => {
     });
   });
 
-  it("applies a real `session.deleted` frame using `.data.sessionID`", async () => {
+  it("applies a real `session.deleted` frame using `.properties.sessionID`", async () => {
     const { result } = renderHook(useHarness, { wrapper });
     await waitFor(() =>
       expect(result.current.sessions.data).toEqual([SEED]),
@@ -168,7 +170,7 @@ describe("useOpencodeEvents", () => {
       FakeEventSource.eventStream().emit({
         id: "evt_2",
         type: "session.deleted",
-        data: {
+        properties: {
           sessionID: "ses_seed",
           info: SEED,
         },
@@ -183,7 +185,7 @@ describe("useOpencodeEvents", () => {
     });
   });
 
-  it("revalidates messages for the frame's `.data.sessionID` on message.part.updated", async () => {
+  it("revalidates messages for the frame's `.properties.sessionID` on message.part.updated", async () => {
     renderHook(useHarness, { wrapper });
     // wait for the initial message load so the count reflects only the event.
     await waitFor(() => expect(messageFetches).toBeGreaterThan(0));
@@ -193,7 +195,7 @@ describe("useOpencodeEvents", () => {
       FakeEventSource.eventStream().emit({
         id: "evt_3",
         type: "message.part.updated",
-        data: {
+        properties: {
           sessionID: "ses_seed",
           part: { id: "prt_1", type: "text" },
           time: { created: 3 },

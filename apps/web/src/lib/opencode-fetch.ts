@@ -1,9 +1,13 @@
 // Shared request helpers that route opencode API calls through the hub's
 // per-machine proxy (`HubClient.opencode(machineId)`). `path` here is a
-// REAL opencode HTTP path (e.g. "/api/session", "/api/session/:id/message")
-// -- the hub forwards it verbatim to the machine's local `opencode serve`
-// process (apps/hub/src/proxy/routes.ts does no rewriting), so callers must
-// use opencode's actual API surface, not an invented wrapper shape.
+// REAL opencode HTTP path (e.g. "/session", "/session/:id/message") -- the
+// hub forwards it verbatim to the machine's local `opencode serve` process
+// (apps/hub/src/proxy/routes.ts does no rewriting), so callers must use
+// opencode's actual API surface, not an invented wrapper shape. Callers
+// should prefer opencode's UNPREFIXED endpoint family over its `/api/*`
+// family: `/api/*` only serves sessions created through the server, while
+// the unprefixed family also serves sessions created by a plain `opencode`
+// TUI (the primary use case for this app).
 import { hubClient } from "@/lib/hub-client-instance";
 import type { HubClient } from "@/lib/hub-client";
 

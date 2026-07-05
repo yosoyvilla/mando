@@ -976,45 +976,15 @@ function SessionPage() {
       if (!sessionId || !machineId) return;
 
       try {
-        // Real opencode's `POST /api/session/:id/prompt` body only accepts
-        // `{ id?, prompt: { text, files?, agents? }, delivery?, resume? }`
-        // -- there is no `model`/`agent` field on that request (confirmed
-        // via /doc's OpenAPI schema, additionalProperties:false). Switching
-        // model/agent for a session are their own endpoints; call them
-        // first, only when the desired value actually differs from the
-        // session's current one.
-        if (
-          selectedModel.providerID &&
-          selectedModel.modelID &&
-          (currentSession?.model?.id !== selectedModel.modelID ||
-            currentSession?.model?.providerID !== selectedModel.providerID)
-        ) {
-          const modelResponse = await opencodeRequest(
-            machineId,
-            `/api/session/${sessionId}/model`,
-            {
-              method: "POST",
-              body: JSON.stringify({
-                model: {
-                  id: selectedModel.modelID,
-                  providerID: selectedModel.providerID,
-                  ...(selectedModel.variant
-                    ? { variant: selectedModel.variant }
-                    : {}),
-                },
-              }),
-            },
-          );
-          if (!modelResponse.ok) {
-            throw new Error(
-              await getResponseErrorMessage(
-                modelResponse,
-                `Failed to switch model (${modelResponse.status})`,
-              ),
-            );
-          }
-        }
-
+        // The unprefixed `POST /session/:id/message` (confirmed against a
+        // live opencode 1.17.13) accepts the model/agent override directly
+        // in the same request as the prompt (`{messageID?,
+        // model?:{providerID,modelID}, agent?, variant?, parts}`) -- unlike
+        // the `/api/*` family's `/api/session/:id/prompt`, which required
+        // separate `/api/session/:id/model` and `/api/session/:id/agent`
+        // calls first. Only include `model`/`agent` when they actually
+        // differ from the session's current one, to avoid needlessly
+        // forcing a switch on every turn.
         let agentOverride: string | undefined;
         if (supportsAgentSelection) {
           const defaultAgent = isValidSessionAgent(
@@ -1029,33 +999,34 @@ function SessionPage() {
               : undefined;
         }
 
-        if (agentOverride && agentOverride !== currentSession?.agent) {
-          const agentResponse = await opencodeRequest(
-            machineId,
-            `/api/session/${sessionId}/agent`,
-            {
-              method: "POST",
-              body: JSON.stringify({ agent: agentOverride }),
-            },
-          );
-          if (!agentResponse.ok) {
-            throw new Error(
-              await getResponseErrorMessage(
-                agentResponse,
-                `Failed to switch agent (${agentResponse.status})`,
-              ),
-            );
-          }
-        }
+        const modelChanged =
+          selectedModel.providerID &&
+          selectedModel.modelID &&
+          (currentSession?.model?.id !== selectedModel.modelID ||
+            currentSession?.model?.providerID !== selectedModel.providerID);
 
         const response = await opencodeRequest(
           machineId,
-          `/api/session/${sessionId}/prompt`,
+          `/session/${sessionId}/message`,
           {
             method: "POST",
             body: JSON.stringify({
-              id: messageId,
-              prompt: { text: messageText },
+              messageID: messageId,
+              ...(modelChanged
+                ? {
+                    model: {
+                      providerID: selectedModel.providerID,
+                      modelID: selectedModel.modelID,
+                    },
+                  }
+                : {}),
+              ...(selectedModel.variant
+                ? { variant: selectedModel.variant }
+                : {}),
+              ...(agentOverride && agentOverride !== currentSession?.agent
+                ? { agent: agentOverride }
+                : {}),
+              parts: [{ type: "text", text: messageText }],
             }),
           },
         );
@@ -1067,12 +1038,12 @@ function SessionPage() {
           throw new Error(await getResponseErrorMessage(response, fallback));
         }
 
-        // `SessionInputAdmitted` (the real response's `data`) doesn't carry
-        // a fully-formed message -- the assistant turn arrives later via
-        // SSE. Since `messageId` (our own client-generated id, `^msg_...`)
-        // was sent as the request's `id` and already backs the optimistic
-        // user message, no reconciliation swap is needed; just clear its
-        // pending state.
+        // The response body (`{info, parts}` for the created assistant
+        // message) isn't read here -- streaming content for that turn
+        // arrives via SSE instead. Since `messageId` (our own
+        // client-generated id, `^msg_...`) was sent as the request's
+        // `messageID` and already backs the optimistic user message, no
+        // reconciliation swap is needed; just clear its pending state.
         settleOptimisticMessage(machineId, sessionId, messageId);
 
         isNearBottomRef.current = true;

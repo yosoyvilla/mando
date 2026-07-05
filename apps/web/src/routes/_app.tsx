@@ -28,6 +28,9 @@ function ConnectedAppLayout() {
     (s) => s.clearSelectedMachineId,
   );
   const { data: machines } = useMachines();
+  const connectDirectory =
+    machines?.find((machine) => machine.id === selectedMachineId)
+      ?.connectDirectory ?? null;
 
   useEffect(() => {
     if (!machines) return;
@@ -56,7 +59,7 @@ function ConnectedAppLayout() {
     setSelectedMachineId,
   ]);
 
-  useOpencodeEvents(selectedMachineId);
+  useOpencodeEvents(selectedMachineId, connectDirectory);
 
   if (!selectedMachineId) {
     // `machines` is `undefined` while the initial `useMachines()` fetch is
