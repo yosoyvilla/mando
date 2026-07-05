@@ -115,7 +115,7 @@ A machine needs to know one thing before it can pair: the address of your hub. T
 
 If none of these is set, `mando connect` (and therefore `/mando`) stops with `no hub URL configured`. This is why the first pairing always passes `--hub` (or sets `MANDO_HUB`); after that the address is saved and `/mando` alone is enough.
 
-A machine has exactly one connect directory at a time — not one per session or per terminal. Every successful `mando connect` records the directory it was run from as that machine's connect directory, overwriting whatever the previous one saved; the most recent `mando connect` (or `/mando`) always wins. The web interface's session list for that machine scopes to whichever directory won most recently, so connecting a second project from the same machine moves the session list over to it rather than adding to it.
+A machine has exactly one connect directory at a time — not one per session or per terminal. Every successful `mando connect` records the directory it was run from as that machine's connect directory, overwriting whatever the previous one saved; the most recent `mando connect` (or `/mando`) wins — unless a daemon from the previous connect is still running, in which case that connect is a no-op and the old directory stays active. Run `mando disconnect` first to switch projects. The web interface's session list for that machine scopes to whichever directory won most recently, so connecting a second project from the same machine moves the session list over to it rather than adding to it.
 
 ### Hub on the same machine (local)
 
@@ -433,6 +433,7 @@ Each package has its own test suite, runnable with `bun test` from that package'
 - Unit tests cover individual functions and modules in isolation (for example the agent's port-detection and reconnect-backoff logic, or the hub's password hashing).
 - Integration tests exercise real components together: the hub's integration tests run against a real PostgreSQL database (by default `postgres://mando:mando@localhost:5433/mando`, matching the port Docker Compose publishes) and make real HTTP and WebSocket requests against the running application.
 - End-to-end tests in `e2e/` use Playwright to drive the full stack in a real browser — logging in, pairing, watching a machine go online and offline, and sending a prompt whose reply streams back — against a real hub, a real agent, and a stub opencode server.
+- A weekly canary workflow re-runs the real-opencode suite against the LATEST opencode release (not the pinned version) and opens an issue if it breaks, so drift between opencode and this project is caught early.
 - A separate gated suite (`e2e/playwright.real.config.ts`) boots an actual `opencode serve` and proves the handoff end to end against it: a session created the way a terminal creates one is discovered, its messages load, and a prompt sent through the hub reaches it. CI runs this on every push, so drift between the stub and real opencode cannot go unnoticed.
 
 To run the hub's integration tests locally, start a database first:
