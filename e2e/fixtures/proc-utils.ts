@@ -15,6 +15,24 @@ export function waitForExit(child: ChildProcess): Promise<number> {
   });
 }
 
+// Teardown-grade kill: SIGTERM, bounded wait, SIGKILL fallback, bounded
+// wait, then give up and return either way. Plain `kill("SIGTERM")` +
+// `waitForExit` is NOT safe in teardown: a real `opencode serve` on a CI
+// runner was observed to ignore SIGTERM entirely, which left globalSetup's
+// returned teardown awaiting an exit that never came -- every test had
+// already passed, but the job hung for 20+ minutes (until manual
+// cancellation; the runner's own cleanup then found opencode and the hub
+// still alive as orphans). Teardown must never be able to hang the run.
+export async function killAndWait(child: ChildProcess, termTimeoutMs = 10_000): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const exited = waitForExit(child).catch(() => -1);
+  const timedOut = Symbol("timeout");
+  child.kill("SIGTERM");
+  if ((await Promise.race([exited, sleep(termTimeoutMs).then(() => timedOut)])) !== timedOut) return;
+  child.kill("SIGKILL");
+  await Promise.race([exited, sleep(5_000)]);
+}
+
 export async function runToCompletion(
   cmd: string,
   args: string[],

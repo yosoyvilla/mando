@@ -8,17 +8,13 @@
 // for talking to it directly (simulating the "terminal" client that starts
 // a session before the phone connects).
 //
-// The "terminal" session is created via a real `opencode run <message>`
-// (verified against a live opencode 1.17.13), not `POST /api/session` --
-// that's the entire point of this harness: `/api/*`-created sessions have
-// always been visible to Mando, but a plain-TUI/`run` session (writing the
-// `message` store the UNPREFIXED family serves) is the actual production
-// bug this suite guards against. `opencode run` writes its session to the
-// same on-disk project store `opencode serve` reads from when both share a
-// directory -- there is no in-memory state tied to the specific server
-// process -- so running it with `cwd` set to the same directory the serve
-// process was started in is what makes the session discoverable via that
-// server's `GET /session?directory=<dir>` afterward.
+// The "terminal" session is created in the TERMINAL-VISIBLE store (the one
+// the UNPREFIXED API family serves -- where plain-TUI/`opencode run`
+// sessions live), not via `POST /api/session`: `/api/*`-created sessions
+// have always been visible to Mando, but a terminal-store session going
+// invisible is the actual production bug this suite guards against. See
+// RealOpencode.createTerminalSession below for how (and why not
+// `opencode run`).
 //
 // Node-safe (node:child_process/node:net/global fetch): this module is
 // imported by global-setup-real.ts, which Playwright runs under Node even
@@ -30,7 +26,7 @@ import { createServer } from "node:net";
 import { mkdirSync, mkdtempSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { waitFor, waitForExit } from "./proc-utils";
+import { killAndWait, waitFor } from "./proc-utils";
 
 // Fixed path the gated global-setup writes its handoff state to and the
 // gated spec reads it back from. Playwright's globalSetup runs in a
@@ -205,8 +201,9 @@ export async function startRealOpencode(): Promise<RealOpencode> {
       `real opencode (${bin}) GET /doc on port ${port}`,
     );
   } catch (error) {
-    proc.kill("SIGTERM");
-    await waitForExit(proc).catch(() => {});
+    // killAndWait (TERM -> bounded wait -> KILL): same rationale as stop()
+    // below -- a SIGTERM-ignoring opencode must not hang the failure path.
+    await killAndWait(proc);
     const base = error instanceof Error ? error.message : String(error);
     const detail = ocOutput.trim()
       ? `\n--- opencode output (tail) ---\n${ocOutput.trim()}`
@@ -290,8 +287,9 @@ export async function startRealOpencode(): Promise<RealOpencode> {
       return created.id;
     },
     async stop() {
-      proc.kill("SIGTERM");
-      await waitForExit(proc).catch(() => {});
+      // killAndWait, not SIGTERM+waitForExit: a CI opencode ignored SIGTERM
+      // and hung the teardown for 20+ minutes after all tests had passed.
+      await killAndWait(proc);
     },
   };
 }

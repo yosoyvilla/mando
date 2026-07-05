@@ -30,7 +30,7 @@ import { getDb } from "../apps/hub/src/db/client";
 import { readPidFile } from "../packages/agent/src/daemon";
 import { isMachineOnline, loginForCookie } from "./fixtures/hub-api";
 import { DB_URL, REPO_ROOT, seedMachineViaSubprocess } from "./fixtures/machine-lifecycle";
-import { runToCompletion, waitFor, waitForExit } from "./fixtures/proc-utils";
+import { killAndWait, runToCompletion, waitFor } from "./fixtures/proc-utils";
 import { startRealOpencode, REAL_HANDOFF_STATE_FILE, type RealOpencode } from "./fixtures/real-opencode";
 import { ADMIN_EMAIL, ADMIN_PASSWORD, HUB_BASE_URL, HUB_PORT } from "./harness-config";
 
@@ -224,8 +224,7 @@ export default async function globalSetup(_config: FullConfig): Promise<() => Pr
 
       await opencodeRef.stop();
 
-      hubProcess.kill("SIGTERM");
-      await waitForExit(hubProcess).catch(() => {});
+      await killAndWait(hubProcess);
 
       await getDb(DB_URL).end({ timeout: 5 });
       if (existsSync(REAL_HANDOFF_STATE_FILE)) rmSync(REAL_HANDOFF_STATE_FILE, { force: true });
@@ -233,8 +232,7 @@ export default async function globalSetup(_config: FullConfig): Promise<() => Pr
     };
   } catch (error) {
     await opencode?.stop();
-    hubProcess.kill("SIGTERM");
-    await waitForExit(hubProcess).catch(() => {});
+    await killAndWait(hubProcess);
     rmSync(tmpDir, { recursive: true, force: true });
     throw error;
   }
