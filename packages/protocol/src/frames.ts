@@ -20,6 +20,16 @@ export const HelloFrame = z.object({
     // PROTOCOL_VERSION (version.ts) and apps/hub/src/tunnel/ws.ts's
     // handleHello.
     protocolVersion: z.number().int().optional(),
+    // The directory `mando connect` was run from (packages/agent's
+    // connect.ts captures `process.cwd()` and threads it through the
+    // daemon spawn as `--connect-dir`), so the hub can persist it onto the
+    // machine row and the web UI can scope opencode sessions to it. Purely
+    // additive and optional: an older agent build that predates this field
+    // omits it, and the hub's handleHello (apps/hub/src/tunnel/ws.ts)
+    // simply leaves the machine's stored value untouched in that case --
+    // no PROTOCOL_VERSION bump needed since old hubs just ignore/strip an
+    // unknown key and old agents just never send one.
+    connectDirectory: z.string().optional(),
   }),
 });
 

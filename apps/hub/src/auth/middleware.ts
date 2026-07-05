@@ -14,6 +14,7 @@ export type Machine = {
   last_seen_at: Date | string | null;
   revoked_at: Date | string | null;
   created_at: Date | string;
+  connect_directory: string | null;
 };
 
 export type AuthVariables = {

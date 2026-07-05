@@ -104,6 +104,31 @@ describe("connect (pairing flow)", () => {
     }
   });
 
+  it("passes the current working directory to spawnDaemon as the connect directory", async () => {
+    const { server, url } = startPairingStub({ pendingPolls: 0 });
+    const spawnedDirs: string[] = [];
+
+    try {
+      const result = await connect({
+        hub: url,
+        opencodePort: 4096,
+        pairingPollIntervalMs: 5,
+        spawnDaemon: (_port, connectDirectory) => {
+          spawnedDirs.push(connectDirectory);
+          return process.pid;
+        },
+      });
+
+      expect(result.status).toBe("connected");
+      // connect() never overrides its own cwd -- it's always the directory
+      // `mando connect` was actually invoked from (see connect.ts's
+      // defaultSpawnDaemon call site).
+      expect(spawnedDirs).toEqual([process.cwd()]);
+    } finally {
+      server.stop(true);
+    }
+  });
+
   it("treats an unparseable 2xx pairing-status body as still pending and keeps polling", async () => {
     let polls = 0;
     const server = Bun.serve({

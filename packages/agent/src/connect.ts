@@ -42,7 +42,7 @@ export interface ConnectOpts {
   pairingPollIntervalMs?: number;
   fetchFn?: typeof fetch;
   detectOpencodePort?: () => Promise<number | null>;
-  spawnDaemon?: (opencodePort: number) => number;
+  spawnDaemon?: (opencodePort: number, connectDirectory: string) => number;
   // Swaps out the real POSIX liveness check (daemon.ts's `isProcessAlive`,
   // itself `process.kill(pid, 0)` in a try/catch) used by the
   // already-running-daemon guard below, so tests can simulate a live or
@@ -175,6 +175,14 @@ function runningFromCompiledBinary(): boolean {
 // .execPath` is the `bun` binary, so index.ts still needs to be named
 // explicitly as the entrypoint.
 //
+// `--connect-dir` carries connect()'s own `process.cwd()` (the directory
+// `mando connect` was run from) through to the daemon, which forwards it
+// verbatim in the hello frame's payload -- see daemon.ts's runDaemonMain
+// and DaemonOptions.connectDirectory. Sent unconditionally here (connect()
+// always knows its own cwd), but daemon.ts still treats it as optional on
+// the parsing side, since a daemon can also be started by other argv that
+// predates or omits this flag.
+//
 // The pidfile is written here, synchronously, using `proc.pid` -- not
 // deferred to the child writing its own pidfile once its event loop gets
 // around to it -- so that by the time connect() returns and prints
@@ -184,10 +192,11 @@ function runningFromCompiledBinary(): boolean {
 // intermediate shell, `proc.pid` and the daemon's own `process.pid` are
 // the same process, so this is a redundant-but-harmless overwrite with an
 // identical value, not a race.
-function defaultSpawnDaemon(opencodePort: number): number {
+function defaultSpawnDaemon(opencodePort: number, connectDirectory: string): number {
+  const daemonArgs = ["_daemon", "--opencode-port", String(opencodePort), "--connect-dir", connectDirectory];
   const args = runningFromCompiledBinary()
-    ? [process.execPath, "_daemon", "--opencode-port", String(opencodePort)]
-    : [process.execPath, join(import.meta.dir, "index.ts"), "_daemon", "--opencode-port", String(opencodePort)];
+    ? [process.execPath, ...daemonArgs]
+    : [process.execPath, join(import.meta.dir, "index.ts"), ...daemonArgs];
 
   const proc = Bun.spawn(args, {
     detached: true,
@@ -294,7 +303,7 @@ export async function connect(opts: ConnectOpts = {}): Promise<ConnectResult> {
 
   let daemonPid: number;
   try {
-    daemonPid = spawnDaemon(opencodePort);
+    daemonPid = spawnDaemon(opencodePort, process.cwd());
   } catch (error) {
     // Compiled installs where re-exec'ing the current executable itself
     // fails (e.g. permissions, a missing execPath) must not be reported as

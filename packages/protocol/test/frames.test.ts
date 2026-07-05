@@ -74,3 +74,50 @@ test("hello parses with protocolVersion set", () => {
 test("PROTOCOL_VERSION is exported as an integer", () => {
   expect(Number.isInteger(PROTOCOL_VERSION)).toBe(true);
 });
+
+test("hello parses without connectDirectory (agent build that predates it)", () => {
+  const f = {
+    type: "hello",
+    id: "h-no-dir",
+    payload: { token: "t", machineName: "laptop", opencodePort: 4096, agentVersion: "0.1.0" },
+  } as const;
+  const frame = parseFrame(serializeFrame(f));
+  expect(frame.type).toBe("hello");
+  if (frame.type === "hello") {
+    expect(frame.payload.connectDirectory).toBeUndefined();
+  }
+});
+
+test("hello carries connectDirectory when present", () => {
+  const f = {
+    type: "hello",
+    id: "h-dir",
+    payload: {
+      token: "t",
+      machineName: "laptop",
+      opencodePort: 4096,
+      agentVersion: "0.1.0",
+      connectDirectory: "/Users/dev/my-project",
+    },
+  } as const;
+  expect(parseFrame(serializeFrame(f))).toEqual(f);
+});
+
+test("hello strips unknown fields rather than rejecting the frame", () => {
+  const raw = JSON.stringify({
+    type: "hello",
+    id: "h-unknown",
+    payload: {
+      token: "t",
+      machineName: "laptop",
+      opencodePort: 4096,
+      agentVersion: "0.1.0",
+      somethingFuture: "ignored",
+    },
+  });
+  const frame = parseFrame(raw);
+  expect(frame.type).toBe("hello");
+  if (frame.type === "hello") {
+    expect(frame.payload).not.toHaveProperty("somethingFuture");
+  }
+});

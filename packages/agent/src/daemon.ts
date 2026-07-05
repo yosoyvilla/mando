@@ -161,6 +161,14 @@ export interface DaemonOptions {
   opencodePort: number;
   agentVersion?: string;
   opencodePassword?: string;
+  // The directory `mando connect` was run from (see connect.ts and
+  // index.ts's `_daemon --connect-dir <path>` dispatch), forwarded as-is in
+  // the hello frame's payload. Optional -- a daemon started from a
+  // pre-existing pidfile/argv that predates this flag (or a reconnect where
+  // the flag was simply never passed) must still be able to hello
+  // successfully; @mando/protocol's HelloFrame treats the field as
+  // optional for exactly this reason.
+  connectDirectory?: string;
   pidFile?: string;
   stateFile?: string;
   errorFile?: string;
@@ -201,6 +209,7 @@ export async function runDaemon(opts: DaemonOptions): Promise<void> {
     opencodePort,
     agentVersion = AGENT_VERSION,
     opencodePassword,
+    connectDirectory,
     pidFile = defaultPidFilePath(),
     stateFile = defaultStateFilePath(),
     errorFile = defaultErrorFilePath(),
@@ -293,7 +302,19 @@ export async function runDaemon(opts: DaemonOptions): Promise<void> {
           serializeFrame({
             type: "hello",
             id: crypto.randomUUID(),
-            payload: { token, machineName, opencodePort, agentVersion, protocolVersion: PROTOCOL_VERSION },
+            payload: {
+              token,
+              machineName,
+              opencodePort,
+              agentVersion,
+              protocolVersion: PROTOCOL_VERSION,
+              // Omitted (not sent as an explicit `undefined`) when this
+              // daemon wasn't given a connect directory -- JSON.stringify
+              // drops undefined-valued keys on its own, so this is already
+              // equivalent to leaving the key out entirely, matching a
+              // pre-connectDirectory agent build's hello exactly.
+              connectDirectory,
+            },
           }),
         );
       });
@@ -396,6 +417,13 @@ export async function runDaemonMain(args: string[]): Promise<void> {
     process.exit(1);
   }
 
+  // Optional, unlike --opencode-port above: a daemon spawned by an older
+  // connect.ts build (or reconnecting from a stale argv) simply never
+  // received this flag, and runDaemon's hello-building tolerates its
+  // absence -- see DaemonOptions.connectDirectory.
+  const connectDirIndex = args.indexOf("--connect-dir");
+  const connectDirectory = connectDirIndex >= 0 ? args[connectDirIndex + 1] : undefined;
+
   const config = readConfig();
   if (!config || !config.token) {
     console.error("mando daemon: no token configured; run `mando connect` first");
@@ -412,6 +440,7 @@ export async function runDaemonMain(args: string[]): Promise<void> {
     machineName: config.machineName,
     opencodePort,
     opencodePassword: process.env.MANDO_OPENCODE_PASSWORD,
+    connectDirectory,
     // Without this, a fatal hub rejection (version_mismatch,
     // unauthorized, hello_timeout) was silently swallowed here: runDaemon
     // defaults `onEvent` to a no-op, so nothing was ever printed for

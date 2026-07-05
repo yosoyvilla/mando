@@ -3,7 +3,7 @@ import { getDb } from "../../src/db/client";
 import { runMigrations } from "../../src/db/migrate";
 import { loadConfig } from "../../src/config";
 import { createUser } from "../../src/users/repo";
-import { createMachine, insertMachineToken } from "../../src/machines/repo";
+import { createMachine, getMachine, insertMachineToken } from "../../src/machines/repo";
 import { hashSecret } from "../../src/auth/password";
 import { serializeFrame, parseFrame, PROTOCOL_VERSION, type Frame } from "@mando/protocol";
 import { Registry } from "../../src/tunnel/registry";
@@ -49,7 +49,12 @@ async function seedMachine(tag: string) {
 // NOT `undefined`, since a default parameter substitutes its default for
 // an explicitly-passed `undefined` too, which would silently defeat the
 // "omit the field" case.
-function helloFrame(id: string, token: string, protocolVersion?: number | null): string {
+function helloFrame(
+  id: string,
+  token: string,
+  protocolVersion?: number | null,
+  connectDirectory?: string,
+): string {
   const version = protocolVersion === null ? undefined : protocolVersion ?? PROTOCOL_VERSION;
   return serializeFrame({
     type: "hello",
@@ -60,6 +65,7 @@ function helloFrame(id: string, token: string, protocolVersion?: number | null):
       opencodePort: 4096,
       agentVersion: "0.0.1-test",
       ...(version === undefined ? {} : { protocolVersion: version }),
+      ...(connectDirectory === undefined ? {} : { connectDirectory }),
     },
   });
 }
@@ -139,6 +145,59 @@ test(
     expect(registry.get(machine.id)).not.toBeNull();
 
     ws.close();
+    server.stop();
+  },
+  FRAME_WAIT_MS * 2,
+);
+
+test(
+  "hello carrying connectDirectory persists it onto the machine row",
+  async () => {
+    const registry = new Registry();
+    const server = await startTestServer({ sql, config, registry });
+    const { machine, token } = await seedMachine("connect-directory");
+
+    const ws = new WebSocket(server.wsUrl);
+    await waitForOpen(ws);
+    ws.send(helloFrame("hello-connect-dir", token, PROTOCOL_VERSION, "/Users/dev/my-project"));
+
+    await waitForFrame(ws, (f) => f.type === "registered");
+
+    const stored = await getMachine(sql, machine.id);
+    expect(stored?.connect_directory).toBe("/Users/dev/my-project");
+
+    ws.close();
+    server.stop();
+  },
+  FRAME_WAIT_MS * 2,
+);
+
+test(
+  "hello with no connectDirectory (old agent build) leaves the machine's stored directory untouched",
+  async () => {
+    const registry = new Registry();
+    const server = await startTestServer({ sql, config, registry });
+    const { machine, token } = await seedMachine("connect-directory-absent");
+
+    // First hello establishes a stored connectDirectory...
+    const firstWs = new WebSocket(server.wsUrl);
+    await waitForOpen(firstWs);
+    firstWs.send(helloFrame("hello-connect-dir-1", token, PROTOCOL_VERSION, "/Users/dev/my-project"));
+    await waitForFrame(firstWs, (f) => f.type === "registered");
+    firstWs.close();
+    await waitForClose(firstWs);
+
+    // ...a reconnect from a daemon build that omits the field must not
+    // clobber it back to null.
+    const secondWs = new WebSocket(server.wsUrl);
+    await waitForOpen(secondWs);
+    secondWs.send(helloFrame("hello-connect-dir-2", token));
+    await waitForFrame(secondWs, (f) => f.type === "registered");
+
+    const stored = await getMachine(sql, machine.id);
+    expect(stored?.connect_directory).toBe("/Users/dev/my-project");
+
+    secondWs.close();
     server.stop();
   },
   FRAME_WAIT_MS * 2,

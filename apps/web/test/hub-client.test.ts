@@ -94,6 +94,7 @@ describe("createHubClient", () => {
           lastSeenAt: "2026-07-01T00:00:00.000Z",
           revokedAt: null,
           createdAt: "2026-01-01T00:00:00.000Z",
+          connectDirectory: "/Users/dev/my-project",
         },
       ];
       const fetchMock = mock<FetchFn>(() => Promise.resolve(jsonResponse({ machines })));
@@ -119,6 +120,7 @@ describe("createHubClient", () => {
         lastSeenAt: null,
         revokedAt: null,
         createdAt: "2026-01-01T00:00:00.000Z",
+        connectDirectory: null,
       };
       const fetchMock = mock<FetchFn>(() => Promise.resolve(jsonResponse({ machine })));
       globalThis.fetch = fetchMock as unknown as typeof fetch;

@@ -77,7 +77,7 @@ async function pairAndApprove(
   return { machineId, token: token as string };
 }
 
-function helloFrame(id: string, token: string): string {
+function helloFrame(id: string, token: string, connectDirectory?: string): string {
   return serializeFrame({
     type: "hello",
     id,
@@ -87,6 +87,7 @@ function helloFrame(id: string, token: string): string {
       opencodePort: 4096,
       agentVersion: "0.0.1-test",
       protocolVersion: PROTOCOL_VERSION,
+      ...(connectDirectory === undefined ? {} : { connectDirectory }),
     },
   });
 }
@@ -143,10 +144,10 @@ function waitForClose(ws: WebSocket, timeoutMs = FRAME_WAIT_MS): Promise<void> {
 // Connects a real WS agent to `server` and waits for it to register, so
 // tests can make a machine show up as online through the same tunnel path
 // production agents use, rather than poking the Registry directly.
-async function connectAgent(server: TestServer, token: string): Promise<WebSocket> {
+async function connectAgent(server: TestServer, token: string, connectDirectory?: string): Promise<WebSocket> {
   const ws = new WebSocket(server.wsUrl);
   await waitForOpen(ws);
-  ws.send(helloFrame(crypto.randomUUID(), token));
+  ws.send(helloFrame(crypto.randomUUID(), token, connectDirectory));
   await waitForFrame(ws, (f) => f.type === "registered");
   return ws;
 }
@@ -172,6 +173,36 @@ test(
     expect(byId.get(offline.machineId)?.online).toBe(false);
 
     ws.close();
+    server.stop();
+  },
+  FRAME_WAIT_MS * 2,
+);
+
+test(
+  "GET /api/v1/machines returns connectDirectory once a hello has carried it",
+  async () => {
+    const registry = new Registry();
+    const server = await startTestServer({ sql, config, registry });
+    const { cookie } = await registerAndLogin(server, "connect-dir-owner");
+
+    const withDir = await pairAndApprove(server, cookie, "with-connect-dir");
+    const withoutDir = await pairAndApprove(server, cookie, "without-connect-dir");
+
+    const wsWithDir = await connectAgent(server, withDir.token, "/Users/dev/my-project");
+    const wsWithoutDir = await connectAgent(server, withoutDir.token);
+
+    const res = await fetch(`${server.url}/api/v1/machines`, { headers: { Cookie: cookie } });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    const byId = new Map<string, { id: string; connectDirectory: string | null }>(
+      body.machines.map((m: { id: string; connectDirectory: string | null }) => [m.id, m]),
+    );
+
+    expect(byId.get(withDir.machineId)?.connectDirectory).toBe("/Users/dev/my-project");
+    expect(byId.get(withoutDir.machineId)?.connectDirectory).toBeNull();
+
+    wsWithDir.close();
+    wsWithoutDir.close();
     server.stop();
   },
   FRAME_WAIT_MS * 2,

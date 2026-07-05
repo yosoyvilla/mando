@@ -16,6 +16,7 @@ function serializeMachine(machine: Machine, online: boolean) {
     lastSeenAt: machine.last_seen_at,
     revokedAt: machine.revoked_at,
     createdAt: machine.created_at,
+    connectDirectory: machine.connect_directory ?? null,
     online,
   };
 }

@@ -1,7 +1,7 @@
 import { createBunWebSocket } from "hono/bun";
 import type postgres from "postgres";
 import { parseFrame, serializeFrame, PROTOCOL_VERSION, type Frame } from "@mando/protocol";
-import { findMachineByToken } from "../machines/repo";
+import { findMachineByToken, setConnectDirectory } from "../machines/repo";
 import type { Registry, Conn } from "./registry";
 
 type Sql = ReturnType<typeof postgres>;
@@ -147,6 +147,15 @@ export function tunnelWsHandler(deps: TunnelWsDeps) {
       }
 
       machineId = machine.id;
+
+      // Only persist when the agent actually sent one -- an old agent
+      // build predating connectDirectory (see @mando/protocol's
+      // HelloFrame) omits the field entirely, and a reconnect from such a
+      // build must not clobber whatever directory a previous, newer hello
+      // already stored for this machine.
+      if (frame.payload.connectDirectory) {
+        await setConnectDirectory(deps.sql, machineId, frame.payload.connectDirectory);
+      }
 
       const conn: Conn = {
         send(f) {
