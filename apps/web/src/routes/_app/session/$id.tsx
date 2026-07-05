@@ -10,6 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Loader } from "@/components/ui/loader";
 import { AgentSelect } from "@/components/agent-select";
 import { ModelSelect } from "@/components/model-select";
+import { SessionContinuityHint } from "@/components/session-continuity-hint";
 import {
   FileMentionPopover,
   useFileMention,
@@ -1232,6 +1233,7 @@ function SessionPage() {
       </div>
 
       <div className="border-t border-border p-4 shrink-0 relative">
+        <SessionContinuityHint />
         <FileMentionPopover
           isOpen={fileMention.isOpen}
           searchQuery={fileMention.searchQuery}

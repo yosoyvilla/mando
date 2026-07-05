@@ -13,7 +13,7 @@ It is meant to be self-hosted. You run the server on a machine you control (your
 - [Connecting a machine](#connecting-a-machine) — including a hub running on another server
 - [Installing the agent](#installing-the-agent) — building the binary, config, commands and flags
 - [The /mando command](#the-mando-command)
-- [Live mirroring with mando tui](#live-mirroring-with-mando-tui)
+- [Live mirroring with mando tui](#live-mirroring-with-mando-tui) — and [how a session moves between terminal and browser](#how-a-session-moves-between-terminal-and-browser)
 - [Configuration](#configuration) — environment variables
 - [Deploying](#deploying) — running the hub on a server
 - [Managing users and machines](#managing-users-and-machines)
@@ -197,7 +197,7 @@ The command takes no arguments. Anything typed after `/mando` is ignored rather 
 
 ## Live mirroring with mando tui
 
-Everything described so far gets your terminal session into the browser, but the browser only catches up — it does not mirror your terminal live as you type, and a prompt sent from the browser does not appear in your open terminal. `mando tui` closes that gap.
+Everything described so far gets your terminal session into the browser with its complete history, but neither side redraws the other live: the browser shows your terminal work when you open or come back to the session there, and a prompt sent from the browser does not appear in your already-open terminal at all until you reopen the session (see [how a session moves between terminal and browser](#how-a-session-moves-between-terminal-and-browser) below). `mando tui` closes that gap in both directions.
 
 Instead of running `opencode` directly, run `mando tui`. You get the exact same opencode terminal — same keys, same screen — but now the terminal and the browser are two windows onto the same live session: a prompt sent from a phone appears in the open terminal as it streams in, and whatever you type in the terminal streams out to the browser the same way.
 
@@ -229,7 +229,18 @@ alias opencode='mando tui'
 
 Either way, `mando tui` still runs the real `opencode` binary underneath — it attaches to it rather than replacing it, so anything opencode itself does is unaffected.
 
-To be clear about the difference: a plain, non-attached `opencode` terminal still shows up in the web interface with its full history, exactly as described above — that part does not require `mando tui`. What plain `opencode` does not give you is the live mirroring itself; for that, the terminal has to be the one `mando tui` attached.
+### How a session moves between terminal and browser
+
+Whether or not you use `mando tui`, there is exactly one session and it lives in one place: opencode's own store on your machine. The browser and every terminal read and write that same session — nothing is copied, and nothing leaves the machine except what travels through your hub while you drive it remotely. The history is therefore always complete everywhere. What differs between the two ways of working is only when an already-open window redraws to show new activity:
+
+| | Plain `opencode` | `mando tui` |
+|---|---|---|
+| Your terminal work, seen from the browser | Complete — shown when you open the session there, or when you come back to its tab | Streams live as you type |
+| Your browser or phone work, seen in the open terminal | Never redrawn — reopen the session in the terminal to see it | Streams live |
+
+The seam to know about is that bottom-left cell: a plain `opencode` terminal only redraws from its own activity. If you step away, continue the session from your phone, and come back, your still-open terminal will look exactly as you left it — and typing a new prompt there does not bring the missed messages into view either; only reopening the session does (pick it from the session list, or restart `opencode` and select it). Nothing is lost in the meantime: the work you did remotely is in the same session, and the assistant's context always includes those exchanges because everything reads from the same store. It is purely the display of an already-open plain terminal that does not refresh. The web interface shows a one-time note about this, and this is exactly the behavior `mando tui` exists to remove.
+
+So the everyday flow with plain `opencode` is: work in the terminal, step away, continue on your phone, come back, reopen the session, keep going. If you would rather never think about the reopen step, use `mando tui` (or the alias above) and both sides stay live.
 
 ## Configuration
 
