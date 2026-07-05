@@ -22,7 +22,9 @@ describe("AttachedFiles", () => {
     expect(screen.queryByTestId("attached-files")).toBeNull();
   });
 
-  it("renders an image part inline with a link to the data URL", () => {
+  it("renders an image data URL inline but does not wrap it in a navigable link", () => {
+    // data:image is safe as an <img src> (rendered, not navigated) but a
+    // top-level navigation to it is refused, so there is no wrapping <a>.
     const part = makeFilePart({
       mime: "image/png",
       filename: "screenshot.png",
@@ -32,13 +34,23 @@ describe("AttachedFiles", () => {
 
     const img = screen.getByAltText("screenshot.png") as HTMLImageElement;
     expect(img.src).toBe("data:image/png;base64,AAAA");
+    expect(screen.getByTestId("attached-file-image").tagName).toBe("SPAN");
+  });
 
+  it("wraps a hosted image in a new-tab link", () => {
+    const part = makeFilePart({
+      mime: "image/png",
+      filename: "shot.png",
+      url: "https://example.com/shot.png",
+    });
+    render(<AttachedFiles parts={[part]} />);
     const link = screen.getByTestId("attached-file-image") as HTMLAnchorElement;
-    expect(link.href).toBe("data:image/png;base64,AAAA");
+    expect(link.tagName).toBe("A");
+    expect(link.href).toBe("https://example.com/shot.png");
     expect(link.target).toBe("_blank");
   });
 
-  it("renders a pdf part as a labeled chip, not an image", () => {
+  it("offers a pdf data URL as a download, not a navigation", () => {
     const part = makeFilePart({
       mime: "application/pdf",
       filename: "report.pdf",
@@ -46,12 +58,47 @@ describe("AttachedFiles", () => {
     });
     render(<AttachedFiles parts={[part]} />);
 
-    expect(screen.getByTestId("attached-file-pdf")).toBeTruthy();
-    expect(screen.getByText("report.pdf")).toBeTruthy();
-    expect(screen.queryByRole("img")).toBeNull();
-
     const link = screen.getByTestId("attached-file-pdf") as HTMLAnchorElement;
-    expect(link.href).toBe("data:application/pdf;base64,BBBB");
+    expect(link.tagName).toBe("A");
+    expect(link.getAttribute("download")).toBe("report.pdf");
+    expect(link.getAttribute("target")).toBeNull();
+    expect(link.getAttribute("href")).toBe("data:application/pdf;base64,BBBB");
+    expect(screen.queryByRole("img")).toBeNull();
+  });
+
+  it("refuses a javascript: url — renders inert text, no link", () => {
+    const part = makeFilePart({
+      mime: "application/pdf",
+      filename: "evil.pdf",
+      url: "javascript:alert(1)",
+    });
+    render(<AttachedFiles parts={[part]} />);
+    const el = screen.getByTestId("attached-file-pdf");
+    expect(el.tagName).toBe("SPAN");
+    expect(el.querySelector("a")).toBeNull();
+  });
+
+  it("refuses a data:text/html payload mislabeled as a pdf part", () => {
+    const part = makeFilePart({
+      mime: "application/pdf",
+      filename: "x.pdf",
+      url: "data:text/html;base64,PHNjcmlwdD4=",
+    });
+    render(<AttachedFiles parts={[part]} />);
+    const el = screen.getByTestId("attached-file-pdf");
+    expect(el.tagName).toBe("SPAN");
+  });
+
+  it("refuses a data:image/svg+xml as a navigable image link (renders as span, no href)", () => {
+    // svg as <img src> cannot script, so it still renders; but it must never
+    // become an <a href> that navigates to the svg document.
+    const part = makeFilePart({
+      mime: "image/svg+xml",
+      filename: "x.svg",
+      url: "data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=",
+    });
+    render(<AttachedFiles parts={[part]} />);
+    expect(screen.getByTestId("attached-file-image").tagName).toBe("SPAN");
   });
 
   it("renders an unknown mime as a plain chip labeled with the filename", () => {
