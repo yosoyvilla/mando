@@ -18,7 +18,9 @@ export type AuditEventType =
   | "pairing_approved"
   | "machine_revoked"
   | "user_deleted_self"
-  | "user_deleted_by_admin";
+  | "user_deleted_by_admin"
+  | "password_changed"
+  | "user_role_changed";
 
 export type AuditEventInput = {
   eventType: AuditEventType;

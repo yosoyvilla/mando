@@ -29,6 +29,9 @@ export const DEFAULT_RATE_LIMITS = {
   // each request calls out to the user's own provider for a full streamed
   // reply, same rationale as images' guard above.
   chat: { windowMs: 60_000, max: 20 },
+  // Guards POST /api/v1/me/password: each request runs argon2id verify (and
+  // a hash on success), the same CPU cost that motivates the login limiter.
+  passwordChange: { windowMs: 60_000, max: 10 },
 } as const satisfies Record<string, RateLimitConfig>;
 
 type Bucket = {

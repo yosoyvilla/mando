@@ -431,3 +431,149 @@ test("DELETE /api/v1/me allows a solo admin who is the only user to self-erase (
     if (e !== RollbackMarker) throw e;
   }
 });
+
+test("POST /api/v1/me/password changes the password and signs out other sessions", async () => {
+  const email = uniqueEmail("pwchange");
+  const user = await createUser(sql, email, "old-password-1");
+  const currentSession = await createSession(sql, user.id);
+  const otherSession = await createSession(sql, user.id);
+  const app = buildApp({ sql, config });
+
+  const res = await app.request("/api/v1/me/password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: `mando_sess=${currentSession}` },
+    body: JSON.stringify({ currentPassword: "old-password-1", newPassword: "brand-new-password-2" }),
+  });
+  expect(res.status).toBe(200);
+
+  // Hash actually updated (new password verifies).
+  const after = await findUserByEmail(sql, email);
+  expect(await verifySecret("brand-new-password-2", after.password_hash)).toBe(true);
+
+  // Current session still valid; the other session was invalidated.
+  const meCurrent = await app.request("/api/v1/me", { headers: { Cookie: `mando_sess=${currentSession}` } });
+  expect(meCurrent.status).toBe(200);
+  const meOther = await app.request("/api/v1/me", { headers: { Cookie: `mando_sess=${otherSession}` } });
+  expect(meOther.status).toBe(401);
+});
+
+test("POST /api/v1/me/password rejects a wrong current password without changing anything", async () => {
+  const email = uniqueEmail("pwwrong");
+  const user = await createUser(sql, email, "correct-current");
+  const session = await createSession(sql, user.id);
+  const app = buildApp({ sql, config });
+
+  const res = await app.request("/api/v1/me/password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: `mando_sess=${session}` },
+    body: JSON.stringify({ currentPassword: "wrong-current", newPassword: "some-new-password" }),
+  });
+  expect(res.status).toBe(400);
+  const after = await findUserByEmail(sql, email);
+  expect(await verifySecret("correct-current", after.password_hash)).toBe(true);
+});
+
+test("POST /api/v1/me/password rejects a too-short new password and an unchanged password", async () => {
+  const email = uniqueEmail("pwvalidate");
+  const user = await createUser(sql, email, "correct-current-pw");
+  const session = await createSession(sql, user.id);
+  const app = buildApp({ sql, config });
+
+  const short = await app.request("/api/v1/me/password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: `mando_sess=${session}` },
+    body: JSON.stringify({ currentPassword: "correct-current-pw", newPassword: "short" }),
+  });
+  expect(short.status).toBe(400);
+
+  const same = await app.request("/api/v1/me/password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: `mando_sess=${session}` },
+    body: JSON.stringify({ currentPassword: "correct-current-pw", newPassword: "correct-current-pw" }),
+  });
+  expect(same.status).toBe(400);
+});
+
+test("POST /api/v1/me/password without a session returns 401", async () => {
+  const app = buildApp({ sql, config });
+  const res = await app.request("/api/v1/me/password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ currentPassword: "x", newPassword: "abcdefgh" }),
+  });
+  expect(res.status).toBe(401);
+});
+
+test("PATCH /api/v1/users/:id promotes and demotes a user", async () => {
+  const admin = await createUser(sql, uniqueEmail("role-admin"), "correct-password", { isAdmin: true });
+  const target = await createUser(sql, uniqueEmail("role-target"), "correct-password");
+  const sessionId = await createSession(sql, admin.id);
+  const app = buildApp({ sql, config });
+
+  const promote = await app.request(`/api/v1/users/${target.id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", Cookie: `mando_sess=${sessionId}` },
+    body: JSON.stringify({ isAdmin: true }),
+  });
+  expect(promote.status).toBe(200);
+  expect((await promote.json()).isAdmin).toBe(true);
+  expect((await findUserByEmail(sql, target.email)).is_admin).toBe(true);
+
+  const demote = await app.request(`/api/v1/users/${target.id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", Cookie: `mando_sess=${sessionId}` },
+    body: JSON.stringify({ isAdmin: false }),
+  });
+  expect(demote.status).toBe(200);
+  expect((await findUserByEmail(sql, target.email)).is_admin).toBe(false);
+});
+
+test("PATCH /api/v1/users/:id from a non-admin returns 403 and unknown id returns 404", async () => {
+  const plain = await createUser(sql, uniqueEmail("role-nonadmin"), "correct-password");
+  const plainSession = await createSession(sql, plain.id);
+  const admin = await createUser(sql, uniqueEmail("role-admin2"), "correct-password", { isAdmin: true });
+  const adminSession = await createSession(sql, admin.id);
+  const app = buildApp({ sql, config });
+
+  const forbidden = await app.request(`/api/v1/users/${admin.id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", Cookie: `mando_sess=${plainSession}` },
+    body: JSON.stringify({ isAdmin: true }),
+  });
+  expect(forbidden.status).toBe(403);
+
+  const missing = await app.request(`/api/v1/users/00000000-0000-0000-0000-000000000000`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", Cookie: `mando_sess=${adminSession}` },
+    body: JSON.stringify({ isAdmin: true }),
+  });
+  expect(missing.status).toBe(404);
+});
+
+// Last-admin demote guard. MUST use the rolled-back-transaction trick: the
+// shared test DB has many admins from other suites, so `admins <= 1` only
+// holds inside an isolated `delete from users` tx.
+test("PATCH /api/v1/users/:id refuses to demote the last admin (rolled back)", async () => {
+  const RollbackMarker = Symbol("rollback");
+  try {
+    await sql.begin(async (tx) => {
+      await tx`delete from users`;
+      const t = tx as unknown as typeof sql;
+      const admin = await createUser(t, uniqueEmail("last-admin-demote"), "correct-password", { isAdmin: true });
+      await createUser(t, uniqueEmail("last-admin-other"), "correct-password"); // a non-admin remains
+      const sessionId = await createSession(t, admin.id);
+      const app = buildApp({ sql: t, config });
+
+      const res = await app.request(`/api/v1/users/${admin.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Cookie: `mando_sess=${sessionId}` },
+        body: JSON.stringify({ isAdmin: false }),
+      });
+      expect(res.status).toBe(400);
+      expect((await findUserByEmail(t, admin.email)).is_admin).toBe(true);
+      throw RollbackMarker;
+    });
+  } catch (e) {
+    if (e !== RollbackMarker) throw e;
+  }
+});

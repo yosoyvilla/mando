@@ -108,11 +108,30 @@ exposed to the network.
   plaintext or logged; `listUsers` never selects `password_hash`; `/me`,
   login, and bootstrap all return `isAdmin` so the web can gate the Users
   section (that client gate is UX only — the server check is authoritative).
-  Two guards prevent an unrecoverable admin lockout, since roles can't be
-  granted through the UI: an admin cannot delete their own id via
-  `DELETE /api/v1/users/:id` (400), and `DELETE /api/v1/me` refuses (400)
-  when the caller is the last admin (`admins <= 1`) and other users remain
-  (`total > 1`) — a solo admin who is the only user can still self-erase.
+  Two guards prevent an unrecoverable admin lockout: an admin cannot delete
+  their own id via `DELETE /api/v1/users/:id` (400), and `DELETE /api/v1/me`
+  refuses (400) when the caller is the last admin (`admins <= 1`) and other
+  users remain (`total > 1`) — a solo admin who is the only user can still
+  self-erase. `PATCH /api/v1/users/:id` `{isAdmin}` (requireUser +
+  requireAdmin) promotes/demotes; it 404s a missing target, refuses (400)
+  demoting the last admin (`!isAdmin && target.is_admin && admins <= 1`),
+  and re-checks `setUserAdmin`'s row-count return (404, no audit write) to
+  avoid logging a change to a concurrently-deleted row. Role changes take
+  effect on the next request because `requireAdmin` re-reads the DB each
+  time.
+- **Password change re-authenticates and invalidates other sessions.**
+  `POST /api/v1/me/password` (requireUser, rate-limited via the
+  `passwordChange` bucket) rejects a new password shorter than 8 first (400,
+  via the Zod schema, before any DB read), then verifies the current
+  password with `verifySecret` (400 on mismatch), then rejects a new
+  password that still verifies against the old hash i.e. unchanged (400),
+  then hashes and updates it and calls
+  `deleteOtherSessions(userId, currentCookieSessionId)`
+  — every other session for the user is deleted while the acting session
+  (the current `mando_sess` cookie) stays valid. `getPasswordHash` is used
+  only for this re-auth check and never returned. Audit events
+  `password_changed` and `user_role_changed` were added to the
+  `AuditEventType` union (no secrets in metadata).
 - **Secrets are hashed at rest, never stored or logged in plaintext.**
   - User passwords and machine tokens both use argon2id via `Bun.password`
     (`apps/hub/src/auth/password.ts`).
