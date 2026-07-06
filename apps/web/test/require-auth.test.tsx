@@ -17,6 +17,9 @@ function stubClient(me: () => Promise<HubUser | null>): HubClient {
     login: mock(() => Promise.reject(new Error("not implemented"))),
     logout: mock(() => Promise.reject(new Error("not implemented"))),
     me: mock(me),
+    createUser: mock(() => Promise.reject(new Error("not implemented"))),
+    listUsers: mock(() => Promise.reject(new Error("not implemented"))),
+    adminDeleteUser: mock(() => Promise.reject(new Error("not implemented"))),
     listMachines: mock(() => Promise.reject(new Error("not implemented"))),
     getMachine: mock(() => Promise.reject(new Error("not implemented"))),
     revokeMachine: mock(() => Promise.reject(new Error("not implemented"))),
@@ -54,7 +57,7 @@ function Gate() {
 describe("AuthProvider gating", () => {
   it("shows the app once me() resolves to a user", async () => {
     const client = stubClient(() =>
-      Promise.resolve({ id: "u1", email: "a@b.com" }),
+      Promise.resolve({ id: "u1", email: "a@b.com", isAdmin: false }),
     );
 
     render(
@@ -149,7 +152,7 @@ describe("RequireAuth", () => {
 
   it("lets authenticated users reach the protected route without redirecting", async () => {
     const client = stubClient(() =>
-      Promise.resolve({ id: "u1", email: "a@b.com" }),
+      Promise.resolve({ id: "u1", email: "a@b.com", isAdmin: false }),
     );
     const router = buildTestRouter("/pair?code=ABCD-1234");
 

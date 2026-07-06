@@ -7,10 +7,13 @@ import type { HubClient } from "../src/lib/hub-client";
 function stubClient(overrides: Partial<HubClient> = {}): HubClient {
   return {
     login: mock(() =>
-      Promise.resolve({ user: { id: "u1", email: "a@b.com" } }),
+      Promise.resolve({ user: { id: "u1", email: "a@b.com", isAdmin: false } }),
     ),
     logout: mock(() => Promise.reject(new Error("not implemented"))),
     me: mock(() => Promise.resolve(null)),
+    createUser: mock(() => Promise.reject(new Error("not implemented"))),
+    listUsers: mock(() => Promise.reject(new Error("not implemented"))),
+    adminDeleteUser: mock(() => Promise.reject(new Error("not implemented"))),
     listMachines: mock(() => Promise.reject(new Error("not implemented"))),
     getMachine: mock(() => Promise.reject(new Error("not implemented"))),
     revokeMachine: mock(() => Promise.reject(new Error("not implemented"))),

@@ -24,7 +24,9 @@ afterEach(() => {
 describe("createHubClient", () => {
   describe("login", () => {
     it("POSTs credentials to /api/v1/auth/login with the JSON body and credentials included", async () => {
-      const fetchMock = mock<FetchFn>(() => Promise.resolve(jsonResponse({ user: { id: "u1", email: "a@b.com" } })));
+      const fetchMock = mock<FetchFn>(() =>
+        Promise.resolve(jsonResponse({ user: { id: "u1", email: "a@b.com", isAdmin: false } })),
+      );
       globalThis.fetch = fetchMock as unknown as typeof fetch;
 
       const client = createHubClient();
@@ -36,7 +38,7 @@ describe("createHubClient", () => {
       expect(init.method).toBe("POST");
       expect(init.credentials).toBe("include");
       expect(JSON.parse(init.body as string)).toEqual({ email: "a@b.com", password: "hunter2" });
-      expect(result).toEqual({ user: { id: "u1", email: "a@b.com" } });
+      expect(result).toEqual({ user: { id: "u1", email: "a@b.com", isAdmin: false } });
     });
 
     it("throws HubClientError on 401 bad credentials", async () => {
@@ -66,11 +68,11 @@ describe("createHubClient", () => {
   describe("me", () => {
     it("returns the user on 200", async () => {
       globalThis.fetch = mock(() =>
-        Promise.resolve(jsonResponse({ id: "u1", email: "a@b.com" })),
+        Promise.resolve(jsonResponse({ id: "u1", email: "a@b.com", isAdmin: false })),
       ) as unknown as typeof fetch;
 
       const result = await createHubClient().me();
-      expect(result).toEqual({ id: "u1", email: "a@b.com" });
+      expect(result).toEqual({ id: "u1", email: "a@b.com", isAdmin: false });
     });
 
     it("returns null on 401", async () => {
@@ -702,6 +704,59 @@ describe("createHubClient", () => {
         expect((err as HubClientError).message).toBe("provider_not_configured");
       }
       expect(onDeltaCalled).toBe(false);
+    });
+  });
+
+  describe("admin user management", () => {
+    it("me() returns isAdmin from /api/v1/me", async () => {
+      globalThis.fetch = mock<FetchFn>(() =>
+        Promise.resolve(jsonResponse({ id: "u1", email: "a@b.com", isAdmin: true })),
+      ) as unknown as typeof fetch;
+      const me = await createHubClient().me();
+      expect(me).toEqual({ id: "u1", email: "a@b.com", isAdmin: true });
+    });
+
+    it("createUser POSTs the email to /api/v1/auth/invite and returns the temp password", async () => {
+      const fetchMock = mock<FetchFn>(() =>
+        Promise.resolve(jsonResponse({ user: { id: "u2", email: "new@b.com" }, tempPassword: "abc123" }, 201)),
+      );
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      const result = await createHubClient().createUser("new@b.com");
+      const [url, init = {}] = fetchMock.mock.calls[0];
+      expect(url).toBe("/api/v1/auth/invite");
+      expect(init.method).toBe("POST");
+      expect(init.credentials).toBe("include");
+      expect(JSON.parse(init.body as string)).toEqual({ email: "new@b.com" });
+      expect(result).toEqual({ user: { id: "u2", email: "new@b.com" }, tempPassword: "abc123" });
+    });
+
+    it("createUser surfaces the hub's 409 message on a duplicate email", async () => {
+      globalThis.fetch = mock<FetchFn>(() =>
+        Promise.resolve(jsonResponse({ error: "could not create user" }, 409)),
+      ) as unknown as typeof fetch;
+      await expect(createHubClient().createUser("dup@b.com")).rejects.toBeInstanceOf(HubClientError);
+    });
+
+    it("listUsers GETs /api/v1/users and unwraps the users array", async () => {
+      const users = [{ id: "u1", email: "a@b.com", isAdmin: true, createdAt: "2026-01-01T00:00:00Z" }];
+      globalThis.fetch = mock<FetchFn>(() => Promise.resolve(jsonResponse({ users }))) as unknown as typeof fetch;
+      expect(await createHubClient().listUsers()).toEqual(users);
+    });
+
+    it("adminDeleteUser DELETEs /api/v1/users/:id", async () => {
+      const fetchMock = mock<FetchFn>(() => Promise.resolve(jsonResponse({ ok: true })));
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      await createHubClient().adminDeleteUser("u9");
+      const [url, init = {}] = fetchMock.mock.calls[0];
+      expect(url).toBe("/api/v1/users/u9");
+      expect(init.method).toBe("DELETE");
+    });
+
+    it("adminDeleteUser surfaces the hub's 400 self-delete message", async () => {
+      globalThis.fetch = mock<FetchFn>(() =>
+        Promise.resolve(jsonResponse({ error: "cannot delete your own admin account here" }, 400)),
+      ) as unknown as typeof fetch;
+      await expect(createHubClient().adminDeleteUser("self")).rejects.toBeInstanceOf(HubClientError);
     });
   });
 });
