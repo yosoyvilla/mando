@@ -5,6 +5,7 @@ import {
   Cog6ToothIcon,
   FileDiffIcon,
   HomeIcon,
+  IconUser,
   PhotoIcon,
   PlusIcon,
   ServerIcon,
@@ -308,6 +309,16 @@ export default function AppSidebar(
               <Cog6ToothIcon className="size-4 shrink-0" data-slot="icon" />
               <SidebarLabel>Settings</SidebarLabel>
             </SidebarItem>
+            {user?.isAdmin && (
+              <SidebarItem
+                tooltip="Users"
+                href="/users"
+                className="cursor-pointer gap-x-2"
+              >
+                <IconUser className="size-4 shrink-0" data-slot="icon" />
+                <SidebarLabel>Users</SidebarLabel>
+              </SidebarItem>
+            )}
           </SidebarSection>
 
           <SidebarSection label="Sessions">

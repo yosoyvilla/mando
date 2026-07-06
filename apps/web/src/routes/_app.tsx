@@ -33,7 +33,7 @@ function AppLayout() {
 // listed by pathname so the gate below can skip past the "redirect to
 // /machines" / "wait for a machine to auto-select" logic for exactly these
 // routes while every other `/_app` page keeps requiring a machine as before.
-const MACHINE_INDEPENDENT_PATHS = new Set(["/settings", "/images", "/chat"]);
+const MACHINE_INDEPENDENT_PATHS = new Set(["/settings", "/images", "/chat", "/users"]);
 
 function ConnectedAppLayout() {
   const location = useLocation();
