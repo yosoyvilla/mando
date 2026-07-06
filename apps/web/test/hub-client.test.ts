@@ -759,4 +759,44 @@ describe("createHubClient", () => {
       await expect(createHubClient().adminDeleteUser("self")).rejects.toBeInstanceOf(HubClientError);
     });
   });
+
+  describe("password change and roles", () => {
+    it("changePassword POSTs both passwords to /api/v1/me/password", async () => {
+      const fetchMock = mock<FetchFn>(() => Promise.resolve(jsonResponse({ ok: true })));
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      await createHubClient().changePassword("old-pw", "new-pw-123");
+      const [url, init = {}] = fetchMock.mock.calls[0];
+      expect(url).toBe("/api/v1/me/password");
+      expect(init.method).toBe("POST");
+      expect(init.credentials).toBe("include");
+      expect(JSON.parse(init.body as string)).toEqual({ currentPassword: "old-pw", newPassword: "new-pw-123" });
+    });
+
+    it("changePassword surfaces the hub's 400 message on a wrong current password", async () => {
+      globalThis.fetch = mock<FetchFn>(() =>
+        Promise.resolve(jsonResponse({ error: "current password is incorrect" }, 400)),
+      ) as unknown as typeof fetch;
+      await expect(createHubClient().changePassword("bad", "new-pw-123")).rejects.toBeInstanceOf(HubClientError);
+    });
+
+    it("setUserAdmin PATCHes the role to /api/v1/users/:id and returns the updated user", async () => {
+      const fetchMock = mock<FetchFn>(() =>
+        Promise.resolve(jsonResponse({ id: "u1", email: "a@b.com", isAdmin: true })),
+      );
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      const result = await createHubClient().setUserAdmin("u1", true);
+      const [url, init = {}] = fetchMock.mock.calls[0];
+      expect(url).toBe("/api/v1/users/u1");
+      expect(init.method).toBe("PATCH");
+      expect(JSON.parse(init.body as string)).toEqual({ isAdmin: true });
+      expect(result).toEqual({ id: "u1", email: "a@b.com", isAdmin: true });
+    });
+
+    it("setUserAdmin surfaces the hub's 400 last-admin message", async () => {
+      globalThis.fetch = mock<FetchFn>(() =>
+        Promise.resolve(jsonResponse({ error: "cannot remove the last admin" }, 400)),
+      ) as unknown as typeof fetch;
+      await expect(createHubClient().setUserAdmin("u1", false)).rejects.toBeInstanceOf(HubClientError);
+    });
+  });
 });

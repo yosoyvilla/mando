@@ -11,6 +11,8 @@ function stubClient(machines: Machine[]): HubClient {
     createUser: mock(() => Promise.reject(new Error("not implemented"))),
     listUsers: mock(() => Promise.reject(new Error("not implemented"))),
     adminDeleteUser: mock(() => Promise.reject(new Error("not implemented"))),
+    changePassword: mock(() => Promise.reject(new Error("not implemented"))),
+    setUserAdmin: mock(() => Promise.reject(new Error("not implemented"))),
     listMachines: mock(() => Promise.resolve(machines)),
     getMachine: mock(() => Promise.reject(new Error("not implemented"))),
     revokeMachine: mock(() => Promise.reject(new Error("not implemented"))),

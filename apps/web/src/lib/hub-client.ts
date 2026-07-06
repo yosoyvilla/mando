@@ -180,6 +180,13 @@ export interface HubClient {
   createUser(email: string): Promise<{ user: { id: string; email: string }; tempPassword: string }>;
   listUsers(): Promise<AdminUser[]>;
   adminDeleteUser(id: string): Promise<void>;
+  // Self-service: re-authenticates with the current password, then rotates
+  // it and signs out the user's other sessions server-side (the acting
+  // session stays valid).
+  changePassword(currentPassword: string, newPassword: string): Promise<void>;
+  // Admin-only (backend requireAdmin). Promotes/demotes another user;
+  // rejected with a 400 message if it would remove the last admin.
+  setUserAdmin(id: string, isAdmin: boolean): Promise<{ id: string; email: string; isAdmin: boolean }>;
   listMachines(): Promise<Machine[]>;
   getMachine(id: string): Promise<Machine>;
   revokeMachine(id: string): Promise<void>;
@@ -402,6 +409,22 @@ export function createHubClient(options: HubClientOptions = {}): HubClient {
     async adminDeleteUser(id) {
       const res = await request(`/api/v1/users/${id}`, { method: "DELETE" });
       await parseOrThrowWithMessage(res, "adminDeleteUser failed");
+    },
+
+    async changePassword(currentPassword, newPassword) {
+      const res = await request("/api/v1/me/password", {
+        method: "POST",
+        body: JSON.stringify({ currentPassword, newPassword }),
+      });
+      await parseOrThrowWithMessage(res, "changePassword failed");
+    },
+
+    async setUserAdmin(id, isAdmin) {
+      const res = await request(`/api/v1/users/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ isAdmin }),
+      });
+      return parseOrThrowWithMessage<{ id: string; email: string; isAdmin: boolean }>(res, "setUserAdmin failed");
     },
 
     async listMachines() {
