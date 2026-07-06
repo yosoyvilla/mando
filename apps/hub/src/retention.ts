@@ -1,10 +1,19 @@
 import type postgres from "postgres";
 import { sweepPendingTokens } from "./pairing/service";
+import { retainImages } from "./images/repo";
 
 type Sql = ReturnType<typeof postgres>;
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 export const DEFAULT_TOKEN_RETENTION_WINDOW_MS = THIRTY_DAYS_MS;
+
+// Mirror config.ts's MANDO_IMAGE_RETENTION_DAYS/MANDO_IMAGE_MAX_PER_USER
+// defaults, used only if a caller passes imageDir without also passing
+// these two (index.ts always passes all three together from Config, so
+// this only matters for callers/tests that construct RetentionOptions by
+// hand).
+const DEFAULT_IMAGE_RETENTION_DAYS = 7;
+const DEFAULT_IMAGE_MAX_PER_USER = 100;
 
 export type RetentionOptions = {
   // How long a revoked machine_tokens row is kept before it's purged.
@@ -12,12 +21,22 @@ export type RetentionOptions = {
   // this is purely a data-minimization purge of the row itself, not the
   // separate audit_log trail (see audit.ts), which is unaffected.
   tokenRetentionWindowMs?: number;
+  // Images sweep (images/repo.ts's retainImages): unlinks files + deletes
+  // rows older than imageRetentionDays, or beyond imageMaxPerUser per
+  // user. Left undefined, the images sweep is skipped entirely -- callers
+  // that don't care about images (most existing tests, and any caller
+  // that hasn't wired up MANDO_IMAGE_DIR) get the exact same behavior as
+  // before this option existed.
+  imageDir?: string;
+  imageRetentionDays?: number;
+  imageMaxPerUser?: number;
 };
 
 export type RetentionSummary = {
   sessionsDeleted: number;
   pairingsDeleted: number;
   tokensDeleted: number;
+  imagesDeleted: number;
 };
 
 // Single-pass cleanup of everything that's only ever checked-and-ignored
@@ -55,15 +74,27 @@ export async function runRetention(sql: Sql, opts?: RetentionOptions): Promise<R
     returning id
   `;
 
+  // Images sweep is opt-in via imageDir (see RetentionOptions' doc
+  // comment) -- skipped, not defaulted to a directory, when unset.
+  const imagesDeleted = opts?.imageDir
+    ? (
+        await retainImages(sql, opts.imageDir, {
+          retentionDays: opts.imageRetentionDays ?? DEFAULT_IMAGE_RETENTION_DAYS,
+          maxPerUser: opts.imageMaxPerUser ?? DEFAULT_IMAGE_MAX_PER_USER,
+        })
+      ).deleted
+    : 0;
+
   const summary: RetentionSummary = {
     sessionsDeleted: deletedSessions.length,
     pairingsDeleted: deletedPairings.length,
     tokensDeleted: deletedTokens.length,
+    imagesDeleted,
   };
 
   // No PII here -- just counts.
   console.log(
-    `retention: sessions=${summary.sessionsDeleted} pairings=${summary.pairingsDeleted} tokens=${summary.tokensDeleted}`,
+    `retention: sessions=${summary.sessionsDeleted} pairings=${summary.pairingsDeleted} tokens=${summary.tokensDeleted} images=${summary.imagesDeleted}`,
   );
 
   return summary;

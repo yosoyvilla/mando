@@ -17,6 +17,7 @@ import { Route as AppIndexRouteImport } from './routes/_app/index'
 import { Route as AppSettingsRouteImport } from './routes/_app/settings'
 import { Route as AppImagesRouteImport } from './routes/_app/images'
 import { Route as AppDiffRouteImport } from './routes/_app/diff'
+import { Route as AppChatRouteImport } from './routes/_app/chat'
 import { Route as AppSessionIdRouteImport } from './routes/_app/session/$id'
 
 const PairRoute = PairRouteImport.update({
@@ -58,6 +59,11 @@ const AppDiffRoute = AppDiffRouteImport.update({
   path: '/diff',
   getParentRoute: () => AppRoute,
 } as any)
+const AppChatRoute = AppChatRouteImport.update({
+  id: '/chat',
+  path: '/chat',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppSessionIdRoute = AppSessionIdRouteImport.update({
   id: '/session/$id',
   path: '/session/$id',
@@ -69,6 +75,7 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/machines': typeof MachinesRoute
   '/pair': typeof PairRoute
+  '/chat': typeof AppChatRoute
   '/diff': typeof AppDiffRoute
   '/images': typeof AppImagesRoute
   '/settings': typeof AppSettingsRoute
@@ -78,6 +85,7 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/machines': typeof MachinesRoute
   '/pair': typeof PairRoute
+  '/chat': typeof AppChatRoute
   '/diff': typeof AppDiffRoute
   '/images': typeof AppImagesRoute
   '/settings': typeof AppSettingsRoute
@@ -90,6 +98,7 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/machines': typeof MachinesRoute
   '/pair': typeof PairRoute
+  '/_app/chat': typeof AppChatRoute
   '/_app/diff': typeof AppDiffRoute
   '/_app/images': typeof AppImagesRoute
   '/_app/settings': typeof AppSettingsRoute
@@ -103,6 +112,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/machines'
     | '/pair'
+    | '/chat'
     | '/diff'
     | '/images'
     | '/settings'
@@ -112,6 +122,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/machines'
     | '/pair'
+    | '/chat'
     | '/diff'
     | '/images'
     | '/settings'
@@ -123,6 +134,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/machines'
     | '/pair'
+    | '/_app/chat'
     | '/_app/diff'
     | '/_app/images'
     | '/_app/settings'
@@ -195,6 +207,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppDiffRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/chat': {
+      id: '/_app/chat'
+      path: '/chat'
+      fullPath: '/chat'
+      preLoaderRoute: typeof AppChatRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/session/$id': {
       id: '/_app/session/$id'
       path: '/session/$id'
@@ -206,6 +225,7 @@ declare module '@tanstack/react-router' {
 }
 
 interface AppRouteChildren {
+  AppChatRoute: typeof AppChatRoute
   AppDiffRoute: typeof AppDiffRoute
   AppImagesRoute: typeof AppImagesRoute
   AppSettingsRoute: typeof AppSettingsRoute
@@ -214,6 +234,7 @@ interface AppRouteChildren {
 }
 
 const AppRouteChildren: AppRouteChildren = {
+  AppChatRoute: AppChatRoute,
   AppDiffRoute: AppDiffRoute,
   AppImagesRoute: AppImagesRoute,
   AppSettingsRoute: AppSettingsRoute,

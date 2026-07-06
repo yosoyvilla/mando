@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { ModalOverlay, Modal } from "react-aria-components";
 import { hubClient as defaultHubClient } from "@/lib/hub-client-instance";
 import { HubClientError, type GeneratedImage, type HubClient } from "@/lib/hub-client";
 import { validate as validateAttachment } from "@/lib/attachments";
@@ -6,7 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/field";
 import { Link } from "@/components/ui/link";
-import { TrashIcon } from "@/components/icons/lucide";
+import { Dialog } from "@/components/ui/dialog";
+import { ArrowPathIcon, IconPen, SendIcon, TrashIcon } from "@/components/icons/lucide";
 import {
   Select,
   SelectContent,
@@ -14,9 +16,36 @@ import {
   SelectTrigger,
 } from "@/components/ui/select";
 import { getErrorMessage } from "@/lib/error-message";
+import { useEditSourceStore } from "@/stores/edit-source-store";
+import { SendToSessionDialog } from "@/components/send-to-session-dialog";
 
 interface ImagesGalleryProps {
   client?: HubClient;
+}
+
+// The edit form's source image can come from three places: a freshly
+// attached local file (the original flow), an existing gallery item
+// (Task 3: edit-from-gallery, via imageRoutes' sourceImageId branch -- no
+// re-upload needed), or a data URL handed off from a session message
+// (Task 3: session-image -> edit-in-Images, via edit-source-store.ts).
+type EditSource =
+  | { kind: "file"; file: File }
+  | { kind: "existing"; image: GeneratedImage }
+  | { kind: "dataUrl"; dataUrl: string; mime: string; filename: string };
+
+function editSourceLabel(source: EditSource): string {
+  if (source.kind === "file") return source.file.name;
+  if (source.kind === "existing") return source.image.prompt ?? source.image.id;
+  return source.filename;
+}
+
+// Turns a data: URL (session hand-off) into a File the same `editImage({
+// image })` multipart path already accepts -- `fetch()` can read a data:
+// URL directly, so no manual base64 decoding is needed here.
+async function dataUrlToFile(dataUrl: string, mime: string, filename: string): Promise<File> {
+  const res = await fetch(dataUrl);
+  const blob = await res.blob();
+  return new File([blob], filename, { type: mime });
 }
 
 type GalleryState =
@@ -38,6 +67,12 @@ const SIZE_OPTIONS = [
   { id: "1024x1792", title: "Portrait (1024x1792)" },
   { id: "1792x1024", title: "Landscape (1792x1024)" },
 ];
+
+// "Count": how many images a single Generate submits for -- the hub loops
+// the provider call this many times and stores each (imageRoutes'
+// clampImageCount clamps 1..4 server-side too; this list is just the UI's
+// offered range, kept in sync with that same 1..4 bound).
+const COUNT_OPTIONS = ["1", "2", "3", "4"];
 
 function isProviderNotConfigured(err: unknown): boolean {
   return err instanceof HubClientError && err.status === 400 && err.message === PROVIDER_NOT_CONFIGURED;
@@ -83,10 +118,14 @@ export function ImagesGallery({ client = defaultHubClient }: ImagesGalleryProps)
 
   const [prompt, setPrompt] = useState("");
   const [size, setSize] = useState<string | null>("auto");
+  const [count, setCount] = useState<string | null>("1");
   const [generating, setGenerating] = useState(false);
   const [generateNotice, setGenerateNotice] = useState<Notice | null>(null);
 
-  const [editFile, setEditFile] = useState<File | null>(null);
+  const [regeneratingId, setRegeneratingId] = useState<string | null>(null);
+  const [regenerateNotice, setRegenerateNotice] = useState<Notice | null>(null);
+
+  const [editSource, setEditSource] = useState<EditSource | null>(null);
   const [editPrompt, setEditPrompt] = useState("");
   const [editing, setEditing] = useState(false);
   const [editNotice, setEditNotice] = useState<Notice | null>(null);
@@ -94,6 +133,20 @@ export function ImagesGallery({ client = defaultHubClient }: ImagesGalleryProps)
 
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [enlarged, setEnlarged] = useState<GeneratedImage | null>(null);
+  const [sendTarget, setSendTarget] = useState<GeneratedImage | null>(null);
+
+  const consumePendingEditSource = useEditSourceStore((s) => s.consumePendingEditSource);
+
+  // Task 3: session-image -> edit-in-Images. Runs once on mount -- the
+  // store's consume-and-clear semantics mean a later remount (e.g.
+  // navigating away and back) won't re-apply a stale hand-off.
+  useEffect(() => {
+    const pending = consumePendingEditSource();
+    if (pending) {
+      setEditSource({ kind: "dataUrl", ...pending });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function load() {
     setState({ status: "loading" });
@@ -110,15 +163,19 @@ export function ImagesGallery({ client = defaultHubClient }: ImagesGalleryProps)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [client]);
 
-  function addImage(image: GeneratedImage) {
+  function addImages(newImages: GeneratedImage[]) {
     setState((current) => ({
       status: "ready",
-      images: [image, ...(current.status === "ready" ? current.images : [])],
+      images: [...newImages, ...(current.status === "ready" ? current.images : [])],
     }));
   }
 
   function resolvedSize(): string | undefined {
     return size && size !== "auto" ? size : undefined;
+  }
+
+  function resolvedCount(): number {
+    return count ? Number(count) : 1;
   }
 
   async function handleGenerate(event: React.FormEvent) {
@@ -129,8 +186,12 @@ export function ImagesGallery({ client = defaultHubClient }: ImagesGalleryProps)
     setGenerating(true);
     setGenerateNotice(null);
     try {
-      const image = await client.generateImage({ prompt: trimmed, size: resolvedSize() });
-      addImage(image);
+      const images = await client.generateImage({
+        prompt: trimmed,
+        size: resolvedSize(),
+        n: resolvedCount(),
+      });
+      addImages(images);
       setPrompt("");
     } catch (err) {
       setGenerateNotice(noticeFromError(err, "Failed to generate image."));
@@ -139,38 +200,87 @@ export function ImagesGallery({ client = defaultHubClient }: ImagesGalleryProps)
     }
   }
 
+  // Regenerate: re-submits a single gallery item's own prompt as a brand
+  // new (independent) generation -- always exactly one image, regardless
+  // of the main form's current count selector, since "regenerate this one"
+  // is a distinct action from "generate a fresh batch." Uses the form's
+  // current size selection, since a stored image doesn't carry its own
+  // size back from the provider.
+  async function handleRegenerate(image: GeneratedImage) {
+    const trimmed = image.prompt?.trim();
+    if (!trimmed || regeneratingId) return;
+
+    setRegeneratingId(image.id);
+    setRegenerateNotice(null);
+    try {
+      const images = await client.generateImage({ prompt: trimmed, size: resolvedSize() });
+      addImages(images);
+    } catch (err) {
+      setRegenerateNotice(noticeFromError(err, "Failed to regenerate image."));
+    } finally {
+      setRegeneratingId(null);
+    }
+  }
+
   function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0] ?? null;
     if (!file) {
-      setEditFile(null);
+      setEditSource(null);
       return;
     }
 
     const result = validateAttachment(file, []);
     if (!result.ok) {
       setEditNotice({ kind: "error", message: result.error });
-      setEditFile(null);
+      setEditSource(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
       return;
     }
 
     setEditNotice(null);
-    setEditFile(file);
+    setEditSource({ kind: "file", file });
+  }
+
+  // Edit-from-gallery (Task 3): reuse an existing image as the edit source
+  // instead of re-uploading it -- imageRoutes' POST /images/edits already
+  // accepts {sourceImageId, prompt, size} as a JSON alternative to the
+  // multipart {image} upload.
+  function handleEditFromGallery(image: GeneratedImage) {
+    setEditNotice(null);
+    setEditSource({ kind: "existing", image });
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  function clearEditSource() {
+    setEditSource(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
   async function handleEdit(event: React.FormEvent) {
     event.preventDefault();
     const trimmed = editPrompt.trim();
-    if (!trimmed || !editFile || editing) return;
+    if (!trimmed || !editSource || editing) return;
 
     setEditing(true);
     setEditNotice(null);
     try {
-      const image = await client.editImage({ prompt: trimmed, size: resolvedSize(), image: editFile });
-      addImage(image);
+      const image =
+        editSource.kind === "file"
+          ? await client.editImage({ prompt: trimmed, size: resolvedSize(), image: editSource.file })
+          : editSource.kind === "existing"
+            ? await client.editImage({
+                prompt: trimmed,
+                size: resolvedSize(),
+                sourceImageId: editSource.image.id,
+              })
+            : await client.editImage({
+                prompt: trimmed,
+                size: resolvedSize(),
+                image: await dataUrlToFile(editSource.dataUrl, editSource.mime, editSource.filename),
+              });
+      addImages([image]);
       setEditPrompt("");
-      setEditFile(null);
-      if (fileInputRef.current) fileInputRef.current.value = "";
+      clearEditSource();
     } catch (err) {
       setEditNotice(noticeFromError(err, "Failed to edit image."));
     } finally {
@@ -233,6 +343,24 @@ export function ImagesGallery({ client = defaultHubClient }: ImagesGalleryProps)
               </SelectContent>
             </Select>
           </div>
+          <div className="w-28 space-y-1">
+            <span className="select-none text-base/6 text-fg sm:text-sm/6">Count</span>
+            <Select
+              aria-label="Count"
+              value={count}
+              onChange={(value) => setCount(value ? String(value) : null)}
+              placeholder="1"
+            >
+              <SelectTrigger />
+              <SelectContent>
+                {COUNT_OPTIONS.map((option) => (
+                  <SelectItem key={option} id={option} textValue={option}>
+                    {option}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
           <Button type="submit" isDisabled={generating || !prompt.trim()}>
             {generating ? "Generating..." : "Generate"}
           </Button>
@@ -246,6 +374,14 @@ export function ImagesGallery({ client = defaultHubClient }: ImagesGalleryProps)
         className="max-w-xl space-y-3 border-t border-border pt-6"
       >
         <h2 className="text-sm font-medium">Edit an image</h2>
+        {editSource && editSource.kind !== "file" && (
+          <div className="flex items-center gap-2 rounded-md border border-border bg-muted/25 px-3 py-2 text-sm text-fg/90">
+            <span className="truncate">Editing: {editSourceLabel(editSource)}</span>
+            <Button type="button" size="xs" intent="plain" onPress={clearEditSource}>
+              Clear
+            </Button>
+          </div>
+        )}
         <div className="space-y-1">
           <Label htmlFor="images-edit-file">Source image</Label>
           <input
@@ -266,7 +402,7 @@ export function ImagesGallery({ client = defaultHubClient }: ImagesGalleryProps)
             placeholder="Describe how to edit the attached image..."
           />
         </div>
-        <Button type="submit" isDisabled={editing || !editFile || !editPrompt.trim()}>
+        <Button type="submit" isDisabled={editing || !editSource || !editPrompt.trim()}>
           {editing ? "Editing..." : "Edit"}
         </Button>
         {editNotice && <NoticeBanner notice={editNotice} />}
@@ -307,39 +443,108 @@ export function ImagesGallery({ client = defaultHubClient }: ImagesGalleryProps)
                     className="aspect-square w-full object-cover"
                   />
                 </button>
-                <Button
-                  type="button"
-                  size="sq-xs"
-                  intent="danger"
-                  aria-label={`Delete image: ${image.prompt ?? image.id}`}
-                  onPress={() => handleDelete(image.id)}
-                  isDisabled={deletingId === image.id}
-                  className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 focus:opacity-100"
-                >
-                  <TrashIcon className="size-3.5" />
-                </Button>
+                <div className="absolute top-1 right-1 flex gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100">
+                  {image.prompt && (
+                    <Button
+                      type="button"
+                      size="sq-xs"
+                      intent="secondary"
+                      aria-label={`Regenerate image: ${image.prompt}`}
+                      onPress={() => handleRegenerate(image)}
+                      isDisabled={regeneratingId === image.id}
+                    >
+                      <ArrowPathIcon className={`size-3.5 ${regeneratingId === image.id ? "animate-spin" : ""}`} />
+                    </Button>
+                  )}
+                  <Button
+                    type="button"
+                    size="sq-xs"
+                    intent="secondary"
+                    aria-label={`Edit image: ${image.prompt ?? image.id}`}
+                    onPress={() => handleEditFromGallery(image)}
+                  >
+                    <IconPen className="size-3.5" />
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sq-xs"
+                    intent="secondary"
+                    aria-label={`Send to session: ${image.prompt ?? image.id}`}
+                    onPress={() => setSendTarget(image)}
+                  >
+                    <SendIcon className="size-3.5" />
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sq-xs"
+                    intent="danger"
+                    aria-label={`Delete image: ${image.prompt ?? image.id}`}
+                    onPress={() => handleDelete(image.id)}
+                    isDisabled={deletingId === image.id}
+                  >
+                    <TrashIcon className="size-3.5" />
+                  </Button>
+                </div>
               </li>
             ))}
           </ul>
         )}
+        {regenerateNotice && <div className="mt-3"><NoticeBanner notice={regenerateNotice} /></div>}
       </div>
 
-      {enlarged && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="Enlarged image"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
-          onClick={() => setEnlarged(null)}
-        >
-          <img
-            src={client.imageRawUrl(enlarged.id)}
-            alt={enlarged.prompt ?? "Generated image"}
-            className="max-h-full max-w-full rounded-lg"
-            onClick={(event) => event.stopPropagation()}
-          />
-        </div>
+      {sendTarget && (
+        <SendToSessionDialog
+          image={sendTarget}
+          isOpen={!!sendTarget}
+          onClose={() => setSendTarget(null)}
+          client={client}
+        />
       )}
+
+      {/* Task 6 (A11Y-OVERLAY): react-aria's ModalOverlay/Modal/Dialog --
+          already used elsewhere in this codebase for SheetContent/
+          SendToSessionDialog -- replaces the old plain `<div role="dialog">`
+          click-catcher. It gets focus-trap-while-open, Escape-to-close, and
+          focus-restore-to-the-trigger-on-close for free, all three of which
+          the plain div never had (Escape did nothing, focus could tab out
+          into the page behind it, and closing left focus wherever the
+          browser happened to put it). `isOpen`/`onOpenChange` stay
+          controlled by `enlarged` so every existing open/close call site
+          (the per-item "Enlarge image" button, handleDelete's cleanup)
+          keeps working unchanged.
+
+          No explicit `aria-modal="true"` prop: react-aria deliberately
+          does not set that attribute (Dialog.js's filterDOMProps({global:
+          true}) strips it even if passed) because aria-modal has
+          inconsistent/buggy screen-reader support. Modality is instead
+          enforced natively -- everything outside the overlay gets a real
+          `inert` attribute (see the rendered `<div inert>` wrapper),
+          which is stronger than an aria-modal hint: it actually removes
+          the rest of the page from the accessibility tree AND from
+          keyboard/pointer interaction, not just labels it. */}
+      <ModalOverlay
+        isOpen={!!enlarged}
+        onOpenChange={(open) => {
+          if (!open) setEnlarged(null);
+        }}
+        isDismissable
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+      >
+        <Modal className="max-h-full max-w-full outline-none">
+          <Dialog
+            aria-label={enlarged ? `Enlarged image: ${enlarged.prompt ?? enlarged.id}` : "Enlarged image"}
+            className="outline-none"
+          >
+            {enlarged && (
+              <img
+                src={client.imageRawUrl(enlarged.id)}
+                alt={enlarged.prompt ?? "Generated image"}
+                className="max-h-full max-w-full rounded-lg"
+              />
+            )}
+          </Dialog>
+        </Modal>
+      </ModalOverlay>
     </div>
   );
 }

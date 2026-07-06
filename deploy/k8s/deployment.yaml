@@ -81,6 +81,26 @@ spec:
             #     secretKeyRef:
             #       name: mando-hub-secrets
             #       key: MANDO_ENCRYPTION_KEY
+            # Generated images are files on disk (apps/hub/src/images/storage.ts),
+            # not Postgres rows -- must point at the writable PVC mounted below
+            # (pvc.yaml + the "images" volumeMount), since readOnlyRootFilesystem
+            # (below) makes every other path on this container read-only.
+            - name: MANDO_IMAGE_DIR
+              value: /data/images
+            # Optional: overrides the scheduled retention sweep's defaults
+            # (7 days, 100 images per user -- config.ts). Either condition
+            # alone deletes an image (file + row).
+            # - name: MANDO_IMAGE_RETENTION_DAYS
+            #   value: "7"
+            # - name: MANDO_IMAGE_MAX_PER_USER
+            #   value: "100"
+            # Optional: overrides the Chat feature's per-IP rate limit
+            # (default: a safe built-in limit, same override pattern as
+            # MANDO_RATE_LIMIT_IMAGES_MAX) -- each chat message calls your
+            # configured provider, so this bounds outbound traffic/spend
+            # per window.
+            # - name: MANDO_RATE_LIMIT_CHAT_MAX
+            #   value: "20"
           resources:
             requests:
               cpu: 100m
@@ -113,18 +133,29 @@ spec:
             capabilities:
               drop: ["ALL"]
             readOnlyRootFilesystem: true
-          # readOnlyRootFilesystem is true above. The hub app itself does not
-          # write to disk at runtime (Postgres is external via DATABASE_URL;
-          # a grep of apps/hub/src found zero tmpdir/mkdtemp/writeFile/"/tmp"
-          # usage). We still mount an emptyDir at /tmp defensively because
-          # Bun's runtime (and some transitive deps) can want scratch space
-          # (e.g. for temp files during startup) even when app code doesn't
-          # ask for it explicitly, and a read-only "/tmp" is a common source
-          # of confusing crashes that are hard to attribute back to this
-          # setting. The mount is cheap (memory-backed by default) and safe.
+          # readOnlyRootFilesystem is true above. The only runtime disk
+          # write in apps/hub/src is generated images under MANDO_IMAGE_DIR
+          # (images/storage.ts), which is covered by the "images" PVC mount
+          # below, not by this emptyDir. We still mount an emptyDir at /tmp
+          # defensively because Bun's runtime (and some transitive deps)
+          # can want scratch space (e.g. for temp files during startup)
+          # even when app code doesn't ask for it explicitly, and a
+          # read-only "/tmp" is a common source of confusing crashes that
+          # are hard to attribute back to this setting. The mount is cheap
+          # (memory-backed by default) and safe.
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            # Writable despite readOnlyRootFilesystem: true above -- a
+            # mounted volume's own writability is independent of the
+            # container root filesystem's. Without this mount,
+            # MANDO_IMAGE_DIR=/data/images would resolve to a path on the
+            # read-only root fs and every write would fail with EROFS.
+            - name: images
+              mountPath: /data/images
       volumes:
         - name: tmp
           emptyDir: {}
+        - name: images
+          persistentVolumeClaim:
+            claimName: mando-hub-images

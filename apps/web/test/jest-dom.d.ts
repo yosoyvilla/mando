@@ -11,6 +11,7 @@ declare module "bun:test" {
     toHaveValue(value: string | string[] | number): void;
     toBeDisabled(): void;
     toHaveAttribute(name: string, value?: string | RegExp): void;
+    toHaveFocus(): void;
   }
 }
 

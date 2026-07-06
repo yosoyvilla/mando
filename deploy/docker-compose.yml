@@ -34,7 +34,24 @@ services:
       # Generate one with `openssl rand -hex 32`. Feature stays disabled
       # if this is unset.
       # MANDO_ENCRYPTION_KEY: change-me-to-a-64-char-hex-string
+      # Generated images are stored as files under this directory
+      # (apps/hub/src/images/storage.ts), not in Postgres -- mounted below
+      # on the mando_images volume so files survive container restarts.
+      MANDO_IMAGE_DIR: /data/images
+      # Optional: overrides the scheduled retention sweep's defaults (7
+      # days, 100 images per user -- config.ts). Either condition alone
+      # deletes an image (file + row); raise these if your users need a
+      # bigger/longer-lived gallery.
+      # MANDO_IMAGE_RETENTION_DAYS: "7"
+      # MANDO_IMAGE_MAX_PER_USER: "100"
+      # Optional: overrides the Chat feature's per-IP rate limit (default:
+      # a safe built-in limit, same override pattern as
+      # MANDO_RATE_LIMIT_IMAGES_MAX) -- each chat message calls your
+      # configured provider, so this bounds outbound traffic/spend per
+      # window.
+      # MANDO_RATE_LIMIT_CHAT_MAX: "20"
     ports: ["127.0.0.1:8080:8080"]
+    volumes: ["mando_images:/data/images"]
     depends_on:
       postgres: { condition: service_healthy }
     logging:
@@ -42,4 +59,4 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-volumes: { mando_pg: {} }
+volumes: { mando_pg: {}, mando_images: {} }

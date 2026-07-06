@@ -45,6 +45,7 @@ export class HubClientError extends Error {
 export type Provider = {
   baseUrl: string | null;
   imageModel: string | null;
+  chatModel: string | null;
   hasKey: boolean;
 };
 
@@ -55,6 +56,15 @@ export type SetProviderInput = {
   baseUrl: string;
   apiKey?: string;
   imageModel?: string | null;
+  chatModel?: string | null;
+};
+
+// Matches providerRoutes' GET /api/v1/provider/models: the raw list from
+// the provider's own /models endpoint (only `id` survives the hub's
+// parsing) -- chat-capability filtering (dropping embedding/whisper/
+// kokoro/rerank/flux-* ids) happens client-side, in provider-settings.tsx.
+export type ProviderModel = {
+  id: string;
 };
 
 // Matches imageRoutes' `toMetadata()` in apps/hub/src/images/routes.ts.
@@ -71,6 +81,53 @@ export type GeneratedImage = {
 export type GenerateImageInput = {
   prompt: string;
   size?: string;
+  // "Count": the hub loops the provider call this many times (clamped
+  // 1..4 server-side, see imageRoutes' clampImageCount) and stores each
+  // result -- so a single generateImage() call can return more than one
+  // image. Omitted (or 1) keeps today's single-image behavior.
+  n?: number;
+};
+
+// Matches chatRoutes' `toConversationJson()` in apps/hub/src/chat/routes.ts.
+export type Conversation = {
+  id: string;
+  title: string | null;
+  model: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+// Matches the `attachmentSchema` chatRoutes accepts on POST .../messages --
+// `dataUrl` is a full `data:<mime>;base64,<payload>` string, the same shape
+// lib/attachments.ts's `Attachment.dataUrl` already produces.
+export type ChatAttachment = {
+  mime: string;
+  dataUrl: string;
+  name?: string;
+};
+
+// Matches chatRoutes' `toMessageJson()`.
+export type ChatMessage = {
+  id: string;
+  role: string;
+  content: string;
+  attachments: ChatAttachment[] | null;
+  createdAt: string;
+};
+
+// Matches GET /api/v1/chat/conversations/:id's response shape: the
+// conversation's own fields spread flat, plus its messages -- not nested
+// under a `conversation` key.
+export type ConversationWithMessages = Conversation & { messages: ChatMessage[] };
+
+export type CreateConversationInput = {
+  model?: string | null;
+  title?: string | null;
+};
+
+export type SendChatMessageInput = {
+  content: string;
+  attachments?: ChatAttachment[];
 };
 
 // Mirrors imageRoutes' POST /api/v1/images/edits: either a freshly attached
@@ -119,7 +176,14 @@ export interface HubClient {
   getProvider(): Promise<Provider>;
   setProvider(input: SetProviderInput): Promise<void>;
   deleteProvider(): Promise<void>;
-  generateImage(input: GenerateImageInput): Promise<GeneratedImage>;
+  // Throws HubClientError with status 400 (message "provider_not_configured")
+  // when the user has no provider row yet.
+  listProviderModels(): Promise<ProviderModel[]>;
+  // Returns every image the hub generated for this one call -- always an
+  // array, even for the common `n` omitted/1 case, since imageRoutes' POST
+  // /api/v1/images/generations always responds `{images: [...]}` (see
+  // Task 2: Generation richness).
+  generateImage(input: GenerateImageInput): Promise<GeneratedImage[]>;
   editImage(input: EditImageInput): Promise<GeneratedImage>;
   listImages(): Promise<GeneratedImage[]>;
   // Same-origin GET URL for the raw image bytes, for direct use as an
@@ -128,10 +192,114 @@ export interface HubClient {
   // cookies, unlike `fetch`, which needs `credentials: "include"`).
   imageRawUrl(id: string): string;
   deleteImage(id: string): Promise<void>;
+  // Standalone Chat (see docs/superpowers/plans/2026-07-05-chat-and-images-v2.md,
+  // Task 5): user-scoped, independent of any machine, same 503
+  // "images_disabled" gate as the provider/images surface above.
+  listConversations(): Promise<Conversation[]>;
+  createConversation(input?: CreateConversationInput): Promise<Conversation>;
+  getConversation(id: string): Promise<ConversationWithMessages>;
+  deleteConversation(id: string): Promise<void>;
+  // POSTs the message and consumes the SSE response as it arrives:
+  // `onDelta` fires once per streamed content chunk (chatRoutes' "delta"
+  // events), `onDone` fires once with the persisted assistant message
+  // ("done"), and `onError` fires when the provider call itself fails mid-
+  // stream (chatRoutes' "error" event, e.g. an SSRF-guard rejection) --
+  // note this is distinct from the returned promise rejecting, which only
+  // happens for a non-streaming failure (a non-2xx response arriving
+  // before the SSE body starts, e.g. 400 provider_not_configured, 404, 429,
+  // 503 images_disabled).
+  streamMessage(
+    conversationId: string,
+    input: SendChatMessageInput,
+    onDelta: (content: string) => void,
+    onError: (reason: string) => void,
+    onDone: (message: ChatMessage) => void,
+  ): Promise<void>;
 }
 
 function withLeadingSlash(path: string): string {
   return path.startsWith("/") ? path : `/${path}`;
+}
+
+// Per the SSE spec (and hono's `streamSSE` writer, apps/hub's chat/routes.ts
+// dependency), a field line is "<name>:<space><value>" -- only the single
+// space immediately after the colon is a separator, never trimmed further.
+// A content delta can legitimately start or end with a space (token
+// boundaries in a streamed reply), so this must not be `.trim()`ed.
+function stripSseFieldPrefix(line: string, prefix: string): string {
+  const value = line.slice(prefix.length);
+  return value.startsWith(" ") ? value.slice(1) : value;
+}
+
+type ChatStreamHandlers = {
+  onDelta: (content: string) => void;
+  onError: (reason: string) => void;
+  onDone: (message: ChatMessage) => void;
+};
+
+// Parses one complete SSE event block (everything between two blank lines,
+// no trailing "\n\n") into its event name and joined data. A block with
+// multiple `data:` lines joins them with "\n", matching browser EventSource
+// behavior for multi-line payloads.
+function parseSseEventBlock(block: string): { event: string; data: string } {
+  let event = "message";
+  const dataLines: string[] = [];
+  for (const line of block.split(/\r\n|\r|\n/)) {
+    if (line.startsWith("event:")) {
+      event = stripSseFieldPrefix(line, "event:");
+    } else if (line.startsWith("data:")) {
+      dataLines.push(stripSseFieldPrefix(line, "data:"));
+    }
+  }
+  return { event, data: dataLines.join("\n") };
+}
+
+// Reads chatRoutes' POST .../messages SSE response to completion, dispatching
+// each event to the matching handler as it arrives. "user_message" (the
+// echoed, persisted user message) is intentionally not surfaced here -- the
+// caller already has that content locally, since it just sent it.
+async function consumeChatStream(
+  body: ReadableStream<Uint8Array>,
+  handlers: ChatStreamHandlers,
+): Promise<void> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  function dispatch(block: string): void {
+    if (!block.trim()) return;
+    const { event, data } = parseSseEventBlock(block);
+    if (event === "delta") {
+      handlers.onDelta(data);
+    } else if (event === "error") {
+      handlers.onError(data);
+    } else if (event === "done") {
+      try {
+        handlers.onDone(JSON.parse(data) as ChatMessage);
+      } catch {
+        // A malformed "done" payload leaves nothing useful to hand the
+        // caller -- dropped rather than throwing out of the read loop.
+      }
+    }
+  }
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      let separatorIndex = buffer.indexOf("\n\n");
+      while (separatorIndex !== -1) {
+        dispatch(buffer.slice(0, separatorIndex));
+        buffer = buffer.slice(separatorIndex + 2);
+        separatorIndex = buffer.indexOf("\n\n");
+      }
+    }
+    if (buffer.trim()) dispatch(buffer);
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 export function createHubClient(options: HubClientOptions = {}): HubClient {
@@ -243,16 +411,17 @@ export function createHubClient(options: HubClientOptions = {}): HubClient {
     },
 
     async setProvider(input) {
-      // `apiKey`/`imageModel` are only included when the caller actually
-      // provided them -- matches providerRoutes' PUT contract, where an
-      // omitted `apiKey` means "keep the existing encrypted key" and an
-      // omitted `imageModel` means "leave it unchanged" (`null` explicitly
-      // clears it).
-      const body: { baseUrl: string; apiKey?: string; imageModel?: string | null } = {
+      // `apiKey`/`imageModel`/`chatModel` are only included when the caller
+      // actually provided them -- matches providerRoutes' PUT contract,
+      // where an omitted `apiKey` means "keep the existing encrypted key"
+      // and an omitted `imageModel`/`chatModel` means "leave it unchanged"
+      // (`null` explicitly clears it).
+      const body: { baseUrl: string; apiKey?: string; imageModel?: string | null; chatModel?: string | null } = {
         baseUrl: input.baseUrl,
       };
       if (input.apiKey) body.apiKey = input.apiKey;
       if (input.imageModel !== undefined) body.imageModel = input.imageModel;
+      if (input.chatModel !== undefined) body.chatModel = input.chatModel;
 
       const res = await request("/api/v1/provider", {
         method: "PUT",
@@ -266,12 +435,21 @@ export function createHubClient(options: HubClientOptions = {}): HubClient {
       await parseOrThrowWithMessage(res, "deleteProvider failed");
     },
 
+    async listProviderModels() {
+      const res = await request("/api/v1/provider/models");
+      return parseOrThrowWithMessage<ProviderModel[]>(res, "listProviderModels failed");
+    },
+
     async generateImage(input) {
       const res = await request("/api/v1/images/generations", {
         method: "POST",
-        body: JSON.stringify({ prompt: input.prompt, size: input.size }),
+        body: JSON.stringify({ prompt: input.prompt, size: input.size, n: input.n }),
       });
-      return parseOrThrowWithMessage<GeneratedImage>(res, "generateImage failed");
+      const data = await parseOrThrowWithMessage<{ images: GeneratedImage[] }>(
+        res,
+        "generateImage failed",
+      );
+      return data.images;
     },
 
     async editImage(input) {
@@ -311,6 +489,62 @@ export function createHubClient(options: HubClientOptions = {}): HubClient {
     async deleteImage(id) {
       const res = await request(`/api/v1/images/${id}`, { method: "DELETE" });
       await parseOrThrowWithMessage(res, "deleteImage failed");
+    },
+
+    async listConversations() {
+      const res = await request("/api/v1/chat/conversations");
+      const data = await parseOrThrowWithMessage<{ conversations: Conversation[] }>(
+        res,
+        "listConversations failed",
+      );
+      return data.conversations;
+    },
+
+    async createConversation(input = {}) {
+      // Same "only send a field the caller actually supplied" shape as
+      // setProvider above -- createConversationSchema treats an omitted
+      // model/title the same as an explicit null either way, but this
+      // keeps the request body minimal for the common "just start a new,
+      // untitled conversation" call.
+      const body: { model?: string | null; title?: string | null } = {};
+      if (input.model !== undefined) body.model = input.model;
+      if (input.title !== undefined) body.title = input.title;
+
+      const res = await request("/api/v1/chat/conversations", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      return parseOrThrowWithMessage<Conversation>(res, "createConversation failed");
+    },
+
+    async getConversation(id) {
+      const res = await request(`/api/v1/chat/conversations/${id}`);
+      return parseOrThrowWithMessage<ConversationWithMessages>(res, "getConversation failed");
+    },
+
+    async deleteConversation(id) {
+      const res = await request(`/api/v1/chat/conversations/${id}`, { method: "DELETE" });
+      await parseOrThrowWithMessage(res, "deleteConversation failed");
+    },
+
+    async streamMessage(conversationId, input, onDelta, onError, onDone) {
+      const res = await request(`/api/v1/chat/conversations/${conversationId}/messages`, {
+        method: "POST",
+        body: JSON.stringify({ content: input.content, attachments: input.attachments }),
+      });
+      // A non-2xx here means the SSE body never started (chatRoutes returns
+      // these synchronously, before calling streamSSE) -- provider/SSRF
+      // failures during an already-started stream arrive as an "error"
+      // event instead (handled by onError below), never as a rejected
+      // promise.
+      if (!res.ok) {
+        const message = await getResponseErrorMessage(res, "streamMessage failed");
+        throw new HubClientError(message, res.status);
+      }
+      if (!res.body) {
+        throw new HubClientError("streamMessage failed: empty response body", res.status);
+      }
+      await consumeChatStream(res.body, { onDelta, onError, onDone });
     },
   };
 }

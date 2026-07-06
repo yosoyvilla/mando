@@ -11,6 +11,9 @@ import { proxyRoutes } from "./proxy/routes";
 import { providerRoutes } from "./providers/routes";
 import { imageRoutes } from "./images/routes";
 import { IMAGE_MAX_BYTES, type ProviderClientDeps } from "./images/provider-client";
+import type { ModelClientDeps } from "./providers/model-client";
+import { chatRoutes, MAX_MESSAGE_BODY_BYTES } from "./chat/routes";
+import type { ChatClientDeps } from "./chat/provider-client";
 import { Registry } from "./tunnel/registry";
 import { tunnelWsHandler, websocket } from "./tunnel/ws";
 import { createRateLimiter, DEFAULT_RATE_LIMITS, type RateLimitConfig } from "./middleware/rate-limit";
@@ -79,6 +82,7 @@ export type AppDeps = {
     pairingStatus?: RateLimitConfig;
     wsAgent?: RateLimitConfig;
     images?: RateLimitConfig;
+    chat?: RateLimitConfig;
   };
   // Overrides images/provider-client.ts's SSRF guard for the images
   // routes only -- unset (the production default) uses the real guard.
@@ -86,6 +90,13 @@ export type AppDeps = {
   // server, which the real guard correctly always rejects (loopback,
   // plain http).
   imagesProviderDeps?: ProviderClientDeps;
+  // Same as imagesProviderDeps, but for providers/model-client.ts's SSRF
+  // guard on GET /api/v1/provider/models only.
+  providerModelsDeps?: ModelClientDeps;
+  // Same as imagesProviderDeps, but for chat/provider-client.ts's SSRF
+  // guard on the streaming POST /api/v1/chat/conversations/:id/messages
+  // route only.
+  chatProviderDeps?: ChatClientDeps;
 };
 
 // buildApp is the single place both the real server entry (src/index.ts,
@@ -126,13 +137,27 @@ export function buildApp(deps: AppDeps): Hono<{ Variables: AuthVariables }> {
   // arbitrarily large "source" image to /images/edits before this route
   // ever gets far enough to reject it on other grounds.
   app.use("/api/v1/images/edits", bodyLimit({ maxSize: IMAGE_MAX_BYTES }));
+  // Only the message-send route calls out to the user's own provider (for
+  // a full streamed reply) -- GET/POST conversations and DELETE are plain,
+  // owner-scoped DB reads/writes with no outbound request to bound, same
+  // split as the images routes above.
+  app.use(
+    "/api/v1/chat/conversations/:id/messages",
+    createRateLimiter(rateLimits.chat ?? DEFAULT_RATE_LIMITS.chat),
+  );
+  // Caps the JSON body (content + base64 attachment data URLs) before this
+  // route's own MAX_ATTACHMENT_TOTAL_BYTES check (chat/routes.ts) ever
+  // runs -- same "route-specific bodyLimit ahead of the app-level backstop"
+  // shape as images/edits' IMAGE_MAX_BYTES limit above.
+  app.use("/api/v1/chat/conversations/:id/messages", bodyLimit({ maxSize: MAX_MESSAGE_BODY_BYTES }));
 
   app.route("/", userRoutes(deps.sql, registry));
   app.route("/", pairingRoutes(deps.sql));
   app.route("/", machineRoutes(deps.sql, registry));
   app.route("/", proxyRoutes(deps.sql, registry));
-  app.route("/", providerRoutes(deps.sql, deps.config));
+  app.route("/", providerRoutes(deps.sql, deps.config, deps.providerModelsDeps));
   app.route("/", imageRoutes(deps.sql, deps.config, deps.imagesProviderDeps));
+  app.route("/", chatRoutes(deps.sql, deps.config, deps.chatProviderDeps));
   app.route("/", auditRoutes(deps.sql));
 
   app.get(

@@ -25,6 +25,10 @@ export const DEFAULT_RATE_LIMITS = {
   // outbound traffic (and provider spend) one client can drive per window,
   // same rationale as login's argon2id-verify guard above.
   images: { windowMs: 60_000, max: 20 },
+  // Guards POST /api/v1/chat/conversations/:id/messages (chat/routes.ts):
+  // each request calls out to the user's own provider for a full streamed
+  // reply, same rationale as images' guard above.
+  chat: { windowMs: 60_000, max: 20 },
 } as const satisfies Record<string, RateLimitConfig>;
 
 type Bucket = {

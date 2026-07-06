@@ -1,5 +1,6 @@
 import {
   ArrowRightStartOnRectangleIcon,
+  ChatBubbleLeftIcon,
   ChevronUpDownIcon,
   Cog6ToothIcon,
   FileDiffIcon,
@@ -276,11 +277,21 @@ export default function AppSidebar(
 
           {/* User-scoped, independent of any paired machine (see
               docs/superpowers/plans/2026-07-05-image-generation.md, Task
-              4) -- always available, unlike the machine-scoped items
-              above, since /_app.tsx's layout renders this sidebar even
-              with zero machines paired as long as the current route is
-              /images or /settings. */}
+              4, extended to Chat by docs/superpowers/plans/
+              2026-07-05-chat-and-images-v2.md, Task 5b) -- always
+              available, unlike the machine-scoped items above, since
+              /_app.tsx's layout renders this sidebar even with zero
+              machines paired as long as the current route is /chat,
+              /images, or /settings. */}
           <SidebarSection>
+            <SidebarItem
+              tooltip="Chat"
+              href="/chat"
+              className="cursor-pointer gap-x-2"
+            >
+              <ChatBubbleLeftIcon className="size-4 shrink-0" data-slot="icon" />
+              <SidebarLabel>Chat</SidebarLabel>
+            </SidebarItem>
             <SidebarItem
               tooltip="Images"
               href="/images"

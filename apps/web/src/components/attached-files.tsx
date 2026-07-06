@@ -1,8 +1,27 @@
-import { DocumentIcon } from "@/components/icons/lucide";
+import { DocumentIcon, IconPen } from "@/components/icons/lucide";
+import { Button } from "@/components/ui/button";
 import type { FilePart } from "@/hooks/use-session-messages";
 
 interface AttachedFilesProps {
   parts: FilePart[];
+  // Cross-surface hand-off to Images (Task 3: session-image ->
+  // edit-in-Images). Optional and wired by the caller (routes/_app/
+  // session/$id.tsx) rather than baked in here, so this component stays
+  // router-agnostic and every existing render-without-a-router test keeps
+  // working unchanged. Omitted entirely means no "Edit in Images" button
+  // renders, for any caller that doesn't need the feature.
+  onEditInImages?: (part: FilePart) => void;
+}
+
+// Restricted to `data:image/*` -- exactly what the composer's own
+// attachments produce (lib/attachments.ts's fileToDataUrl) and exactly what
+// "the source bytes come from the message part's data URL" (the plan's own
+// framing for this task) describes. A hosted (http/https) or blob: image
+// part could in principle also be re-fetched, but that's a materially
+// different, unverified code path (cross-origin fetch, blob URL lifetime
+// across a client-side route change) -- out of scope here.
+function isEditableImageDataUrl(url: string): boolean {
+  return /^data:image\//i.test(url);
 }
 
 // A file part's `url` is whatever some client wrote into opencode's session
@@ -53,7 +72,7 @@ function safeDataDownload(url: string, mime: string): string | undefined {
 // from ANY client -- opencode's file-part schema is {mime, filename, url}
 // regardless of which client attached the file, so this isn't specific to
 // the mando composer.
-export function AttachedFiles({ parts }: AttachedFilesProps) {
+export function AttachedFiles({ parts, onEditInImages }: AttachedFilesProps) {
   if (parts.length === 0) return null;
 
   return (
@@ -84,20 +103,32 @@ export function AttachedFiles({ parts }: AttachedFilesProps) {
           }
           // Only wrap in an opening link when the href scheme is also safe;
           // a data:image is fine to show but not to navigate to.
-          return href ? (
-            <a
-              key={part.id}
-              href={href}
-              target="_blank"
-              rel="noreferrer"
-              data-testid="attached-file-image"
-            >
+          const wrapped = href ? (
+            <a href={href} target="_blank" rel="noreferrer" data-testid="attached-file-image">
               {img}
             </a>
           ) : (
-            <span key={part.id} data-testid="attached-file-image">
-              {img}
-            </span>
+            <span data-testid="attached-file-image">{img}</span>
+          );
+
+          if (!onEditInImages || !isEditableImageDataUrl(part.url)) {
+            return <div key={part.id}>{wrapped}</div>;
+          }
+
+          return (
+            <div key={part.id} className="space-y-1">
+              {wrapped}
+              <Button
+                type="button"
+                size="xs"
+                intent="outline"
+                aria-label={`Edit in Images: ${part.filename || "attached image"}`}
+                onPress={() => onEditInImages(part)}
+              >
+                <IconPen size="12px" />
+                Edit in Images
+              </Button>
+            </div>
           );
         }
 

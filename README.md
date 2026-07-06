@@ -4,7 +4,7 @@ OpenCode Mando lets you drive an opencode coding session from somewhere other th
 
 It is meant to be self-hosted. You run the server on a machine you control (your own computer, a VPS, a home server) and use it for yourself, or share it with a few people you trust. It is not a hosted service you sign up for.
 
-The web interface has two sections: driving a remote coding session (Sessions, the subject of most of this document) and a standalone Images section for generating and editing images through your own AI image provider — see [Generating images](#generating-images). Images needs no paired machine at all.
+The web interface has three sections: driving a remote coding session (Sessions, the subject of most of this document), a standalone Images section for generating and editing images through your own AI image provider — see [Generating images](#generating-images) — and a standalone Chat section for talking to that same provider directly, with streaming replies and image attachments for vision models — see [Chat](#chat). Images and Chat both need no paired machine at all.
 
 ![The session view: driving an opencode session from the browser](assets/screenshots/session.png)
 
@@ -17,6 +17,7 @@ The web interface has two sections: driving a remote coding session (Sessions, t
 - [The /mando command](#the-mando-command)
 - [Attaching files](#attaching-files) — images and PDFs from the composer
 - [Generating images](#generating-images) — the standalone Images section, no paired machine required
+- [Chat](#chat) — the standalone Chat section: streaming replies, vision image attachments, model picker, no paired machine required
 - [Live mirroring with mando tui](#live-mirroring-with-mando-tui) — and [how a session moves between terminal and browser](#how-a-session-moves-between-terminal-and-browser)
 - [Configuration](#configuration) — environment variables
 - [Deploying](#deploying) — running the hub on a server, including [logs, backups, and uptime monitoring](#logs-backups-and-uptime-monitoring)
@@ -260,12 +261,28 @@ Separate from sessions, the web interface has a standalone Images section for ge
 
 You bring your own image provider: in Settings, set a base URL and an API key for any OpenAI-compatible image endpoint. The hub stores the API key encrypted at rest ([AES-256-GCM](#security-model)) and never returns or logs it — the settings page only ever shows whether a key is configured, not the key itself.
 
-From the Images section you can generate a new image from a prompt, or edit an existing one by attaching a source image alongside a prompt. Results land in a gallery you can open, or delete when you no longer want them; the hub keeps at most the 50 most recent images per user, deleting the oldest automatically once you pass that.
+From the Images section you can generate one to four images at a time from a prompt (the count selector), or edit an existing one by attaching a source image alongside a prompt. Each result lands in a gallery you can open, delete, or **regenerate** — regenerate re-submits that item's own prompt as a brand-new generation rather than modifying it in place.
+
+Generated images are stored as files on disk under `MANDO_IMAGE_DIR`, not as database rows — a scheduled sweep deletes both the file and its row once **either** it is older than `MANDO_IMAGE_RETENTION_DAYS` **or** it falls outside the newest `MANDO_IMAGE_MAX_PER_USER` images for that user; either condition alone is enough to delete a given image, and the sweep runs on the same interval as the rest of the hub's retention (`MANDO_RETENTION_INTERVAL_MS`, hourly by default).
+
+The Images section also connects to Sessions in three ways:
+
+- **Edit a gallery image** — the Edit action on a gallery item loads it as the edit source directly (no re-upload); submit a prompt and it's edited in place as a new image.
+- **Send to session** — from a gallery item, "Send to session" picks one of your online machines and a session, then sends that image into the session the same way a composer attachment would. Because a session attachment is capped at 8 MB total (see [Attaching files](#attaching-files)) while a generated image can be up to 10 MB, oversized images are blocked with a clear error rather than failing silently partway through.
+- **Edit in Images** — from a session, an image you received as a file attachment has an "Edit in Images" action that opens the Images section with that image preloaded as the edit source.
 
 Two honest notes:
 
 - Your provider needs to expose the OpenAI Images API (`POST /images/generations` and `POST /images/edits`) — in practice, a text-to-image model served behind an OpenAI-compatible endpoint. Not every provider does this, and Mando does not translate between API shapes.
-- Because the base URL is something you control rather than something Mando ships with, the hub validates it before saving and again before every request: HTTPS only, and it refuses to call a private, loopback, link-local, or other non-public address — including ones a hostname might resolve to — and it refuses redirects. A narrow DNS-rebinding race between that check and the connection is a known, accepted limitation: the guard makes SSRF hard, not impossible.
+- Because the base URL is something you control rather than something Mando ships with, the hub validates it before saving and again before every request: HTTPS only, and it refuses to call a private, loopback, link-local, or other non-public address — including ones a hostname might resolve to — and it refuses redirects. A narrow DNS-rebinding race between that check and the connection is a known, accepted limitation: the guard makes SSRF hard, not impossible. The same guard covers every other call to your provider too — chat replies and the model list below included.
+
+## Chat
+
+Also separate from sessions, the web interface has a standalone Chat section for talking to your own AI provider directly — no opencode session and no paired machine involved. It shares the same provider you configured for [Generating images](#generating-images) (Settings), plus a dedicated chat model field.
+
+Start a conversation, pick a model from the picker — populated live from your provider's own model list (`GET /v1/models`), filtered client-side to drop non-chat ids such as embedding, whisper, kokoro, rerank, and image models — and send a message. Replies stream back token by token as they arrive, the same way they would in a typical chat client. Attach an image to a message the same way you would in a session composer (paperclip, paste, or drag and drop); whether the reply actually reflects it depends on the model behind your provider supporting vision, same honest caveat as [Attaching files](#attaching-files).
+
+Conversations are listed, kept, and can be deleted, all scoped to your own account. Like Images, Chat requires `MANDO_ENCRYPTION_KEY` to be set on the hub — without it, the section reports itself as disabled rather than accepting a plaintext key.
 
 ## Live mirroring with mando tui
 
@@ -326,13 +343,17 @@ So the everyday flow with plain `opencode` is: work in the terminal, step away, 
 | `PORT` | No | `8080` | Port the hub listens on. |
 | `MANDO_ADMIN_EMAIL` | No | none | With `MANDO_ADMIN_PASSWORD`, creates (or promotes to admin) this account on startup if it does not already exist. |
 | `MANDO_ADMIN_PASSWORD` | No | none | Password for the admin account above (minimum 8 characters). |
-| `MANDO_ENCRYPTION_KEY` | Required for [Generating images](#generating-images) | none | 32 bytes (hex or base64) used to encrypt provider API keys at rest (AES-256-GCM). Generate one with `openssl rand -hex 32`. Without it, the Images feature is disabled — everything else works normally. |
+| `MANDO_ENCRYPTION_KEY` | Required for [Generating images](#generating-images) and [Chat](#chat) | none | 32 bytes (hex or base64) used to encrypt provider API keys at rest (AES-256-GCM). Generate one with `openssl rand -hex 32`. Without it, the Images and Chat features are disabled — everything else works normally. |
 | `MANDO_WEB_DIR` | No | the bundled build | Directory containing the built web interface to serve. |
+| `MANDO_IMAGE_DIR` | No | `.mando-images` (a repo-local dev directory) | Directory generated/edited image files are stored under. In a real deployment this must point at a persistent, writable volume — see [Deploying](#deploying) — or images vanish on restart. |
+| `MANDO_IMAGE_RETENTION_DAYS` | No | `7` | Images older than this many days are deleted (file and row) by the scheduled retention sweep. |
+| `MANDO_IMAGE_MAX_PER_USER` | No | `100` | Each user's images beyond their newest this-many are deleted by the same sweep, oldest first — independent of, and in addition to, `MANDO_IMAGE_RETENTION_DAYS`. |
 | `MANDO_RATE_LIMIT_LOGIN_MAX` | No | a safe built-in limit | Max login attempts per IP per window. Raise it only if you have a good reason. |
 | `MANDO_RATE_LIMIT_PAIRING_MAX` | No | a safe built-in limit | Max pairing-request/status calls per IP per window. |
 | `MANDO_RATE_LIMIT_WS_AGENT_MAX` | No | a safe built-in limit | Max agent WebSocket connection attempts per IP per window. |
 | `MANDO_RATE_LIMIT_IMAGES_MAX` | No | a safe built-in limit | Max image generation/edit requests per IP per window. |
-| `MANDO_RETENTION_INTERVAL_MS` | No | hourly | How often the hub purges expired sessions, consumed or expired pairing codes, and old revoked tokens. |
+| `MANDO_RATE_LIMIT_CHAT_MAX` | No | a safe built-in limit | Max chat messages per IP per window — each one calls your configured provider. |
+| `MANDO_RETENTION_INTERVAL_MS` | No | hourly | How often the hub purges expired sessions, consumed or expired pairing codes, old revoked tokens, and images past retention. |
 
 ### Agent environment variables
 
@@ -403,7 +424,7 @@ For uptime monitoring, point an external checker — [healthchecks.io](https://h
 - Machines never share that login. Each machine goes through a pairing flow: it requests a short-lived pairing code, a logged-in user approves it in the browser, and only then does the machine receive its own long-lived, revocable token. Only a hash of each token is stored, never the token itself.
 - Revoking a machine immediately drops its live connection and invalidates its token.
 - A machine's local opencode server is never exposed to the internet. It only talks to the `mando` agent over `localhost`, and the agent only ever makes outbound connections to the hub. Nothing on the machine accepts inbound connections. Requests the hub relays are constrained to the local opencode server, so the tunnel cannot be steered at other hosts.
-- Provider API keys for the Images feature are encrypted at rest (AES-256-GCM, keyed by `MANDO_ENCRYPTION_KEY`), never returned to any client and never logged. The provider base URL is SSRF-guarded before saving and before every request (see [Generating images](#generating-images)).
+- Provider API keys for the Images and Chat features are encrypted at rest (AES-256-GCM, keyed by `MANDO_ENCRYPTION_KEY`), never returned to any client and never logged. The provider base URL is SSRF-guarded before saving and before every request the hub makes to it — images, chat, and the model list alike (see [Generating images](#generating-images)).
 - Run the hub behind TLS whenever it is reachable from the internet, and behind a private network or VPN if you do not need it public.
 
 ## Troubleshooting

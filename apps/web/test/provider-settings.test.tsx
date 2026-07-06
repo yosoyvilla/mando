@@ -15,14 +15,20 @@ function stubClient(overrides: Partial<HubClient> = {}): HubClient {
     opencode: mock(() => {
       throw new Error("not implemented");
     }),
-    getProvider: mock(() => Promise.resolve({ baseUrl: null, imageModel: null, hasKey: false })),
+    getProvider: mock(() => Promise.resolve({ baseUrl: null, imageModel: null, chatModel: null, hasKey: false })),
     setProvider: mock(() => Promise.resolve()),
     deleteProvider: mock(() => Promise.resolve()),
+    listProviderModels: mock(() => Promise.reject(new Error("not implemented"))),
     generateImage: mock(() => Promise.reject(new Error("not implemented"))),
     editImage: mock(() => Promise.reject(new Error("not implemented"))),
     listImages: mock(() => Promise.reject(new Error("not implemented"))),
     imageRawUrl: mock((id: string) => `/api/v1/images/${id}/raw`),
     deleteImage: mock(() => Promise.reject(new Error("not implemented"))),
+    listConversations: mock(() => Promise.reject(new Error("not implemented"))),
+    createConversation: mock(() => Promise.reject(new Error("not implemented"))),
+    getConversation: mock(() => Promise.reject(new Error("not implemented"))),
+    deleteConversation: mock(() => Promise.reject(new Error("not implemented"))),
+    streamMessage: mock(() => Promise.reject(new Error("not implemented"))),
     ...overrides,
   };
 }
@@ -32,9 +38,13 @@ describe("ProviderSettings", () => {
     const provider: Provider = {
       baseUrl: "https://api.example.com/v1",
       imageModel: "flux-2-klein",
+      chatModel: "gpt-4o-mini",
       hasKey: true,
     };
-    const client = stubClient({ getProvider: mock(() => Promise.resolve(provider)) });
+    const client = stubClient({
+      getProvider: mock(() => Promise.resolve(provider)),
+      listProviderModels: mock(() => Promise.resolve([])),
+    });
 
     render(<ProviderSettings client={client} />);
 
@@ -47,6 +57,9 @@ describe("ProviderSettings", () => {
 
     const imageModelInput = screen.getByLabelText("Image model") as HTMLInputElement;
     expect(imageModelInput.value).toBe("flux-2-klein");
+
+    const chatModelInput = screen.getByLabelText("Chat model") as HTMLInputElement;
+    expect(chatModelInput.value).toBe("gpt-4o-mini");
   });
 
   it("saves baseUrl and imageModel WITHOUT an apiKey when the field is left blank", async () => {
@@ -63,6 +76,7 @@ describe("ProviderSettings", () => {
         baseUrl: "https://api.example.com/v1",
         apiKey: undefined,
         imageModel: "flux-2-klein",
+        chatModel: null,
       });
     });
   });
@@ -118,9 +132,13 @@ describe("ProviderSettings", () => {
     const provider: Provider = {
       baseUrl: "https://api.example.com/v1",
       imageModel: "flux-2-klein",
+      chatModel: "gpt-4o-mini",
       hasKey: true,
     };
-    const client = stubClient({ getProvider: mock(() => Promise.resolve(provider)) });
+    const client = stubClient({
+      getProvider: mock(() => Promise.resolve(provider)),
+      listProviderModels: mock(() => Promise.resolve([])),
+    });
     render(<ProviderSettings client={client} />);
 
     await screen.findByLabelText("Base URL");
@@ -129,5 +147,60 @@ describe("ProviderSettings", () => {
     await waitFor(() => {
       expect(client.deleteProvider).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it("renders the picker with the fetched model list, dropping non-chat ids (embedding/whisper/kokoro/rerank/flux-*)", async () => {
+    const provider: Provider = {
+      baseUrl: "https://api.example.com/v1",
+      imageModel: null,
+      chatModel: null,
+      hasKey: true,
+    };
+    const client = stubClient({
+      getProvider: mock(() => Promise.resolve(provider)),
+      listProviderModels: mock(() =>
+        Promise.resolve([
+          { id: "gpt-4o-mini" },
+          { id: "text-embedding-3-small" },
+          { id: "whisper-1" },
+          { id: "kokoro-v1" },
+          { id: "rerank-english-v3" },
+          { id: "flux-2-klein" },
+          { id: "claude-haiku" },
+        ]),
+      ),
+    });
+
+    render(<ProviderSettings client={client} />);
+
+    const picker = await screen.findByLabelText("Pick from provider's models") as HTMLSelectElement;
+    const optionLabels = Array.from(picker.options).map((o) => o.value).filter(Boolean);
+    expect(optionLabels).toEqual(["gpt-4o-mini", "claude-haiku"]);
+
+    fireEvent.change(picker, { target: { value: "gpt-4o-mini" } });
+    const chatModelInput = screen.getByLabelText("Chat model") as HTMLInputElement;
+    expect(chatModelInput.value).toBe("gpt-4o-mini");
+  });
+
+  it("falls back to the free-text chat model field when the model list call fails", async () => {
+    const provider: Provider = {
+      baseUrl: "https://api.example.com/v1",
+      imageModel: null,
+      chatModel: null,
+      hasKey: true,
+    };
+    const client = stubClient({
+      getProvider: mock(() => Promise.resolve(provider)),
+      listProviderModels: mock(() => Promise.reject(new Error("network error"))),
+    });
+
+    render(<ProviderSettings client={client} />);
+
+    await screen.findByLabelText("Base URL");
+    expect(screen.queryByLabelText("Pick from provider's models")).toBeNull();
+
+    const chatModelInput = screen.getByLabelText("Chat model") as HTMLInputElement;
+    fireEvent.change(chatModelInput, { target: { value: "custom-chat-model" } });
+    expect(chatModelInput.value).toBe("custom-chat-model");
   });
 });

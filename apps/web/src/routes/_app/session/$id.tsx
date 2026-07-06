@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState, useCallback, useMemo, memo } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -31,6 +31,7 @@ import { AttachedFiles } from "@/components/attached-files";
 import { useAgentStore } from "@/stores/agent-store";
 import { useMachineStore } from "@/stores/machine-store";
 import { useModelStore } from "@/stores/model-store";
+import { useEditSourceStore } from "@/stores/edit-source-store";
 import { useBreadcrumb } from "@/contexts/breadcrumb-context";
 import {
   useSessionMessages,
@@ -705,6 +706,7 @@ const MessageItem = memo(function MessageItem({
   pendingQuestions,
   onPermissionResolved,
   onQuestionResolved,
+  onEditInImages,
 }: {
   message: MessageWithParts;
   machineId: string;
@@ -713,6 +715,7 @@ const MessageItem = memo(function MessageItem({
   pendingQuestions: QuestionRequest[];
   onPermissionResolved: (requestId: string) => void;
   onQuestionResolved: (requestId: string) => void;
+  onEditInImages: (part: FilePart) => void;
 }) {
   const textContent = getMessageContent(message.parts);
   const fileParts = getFileParts(message.parts);
@@ -758,7 +761,9 @@ const MessageItem = memo(function MessageItem({
                 className={textContent ? "mt-2" : ""}
               />
             )}
-            {fileParts.length > 0 && <AttachedFiles parts={fileParts} />}
+            {fileParts.length > 0 && (
+              <AttachedFiles parts={fileParts} onEditInImages={onEditInImages} />
+            )}
           </div>
         </div>
       )}
@@ -825,6 +830,25 @@ function SessionPage() {
   const selectedAgent = useAgentStore((s) => s.getSelectedAgent(sessionId));
   const setSelectedAgent = useAgentStore((s) => s.setSelectedAgent);
   const { setPageTitle } = useBreadcrumb();
+  const navigate = useNavigate();
+  const setPendingEditSource = useEditSourceStore((s) => s.setPendingEditSource);
+
+  // Task 3: session-image -> edit-in-Images. Hands the clicked part's own
+  // data URL off to the transient store and navigates to /images, where
+  // ImagesGallery consumes it on mount to preload the edit form's source --
+  // this route component owns the router context AttachedFiles itself
+  // deliberately doesn't depend on (see attached-files.tsx's doc comment).
+  const handleEditInImages = useCallback(
+    (part: FilePart) => {
+      setPendingEditSource({
+        dataUrl: part.url,
+        mime: part.mime,
+        filename: part.filename || "image",
+      });
+      navigate({ to: "/images" });
+    },
+    [navigate, setPendingEditSource],
+  );
 
   const sessions: Session[] = sessionsData ?? [];
   const agents: Agent[] = agentsData ?? [];
@@ -1334,6 +1358,7 @@ function SessionPage() {
                 pendingQuestions={pendingQuestions}
                 onPermissionResolved={handlePermissionResolved}
                 onQuestionResolved={handleQuestionResolved}
+                onEditInImages={handleEditInImages}
               />
             ))}
           {unlinkedPermissions.length > 0 && (

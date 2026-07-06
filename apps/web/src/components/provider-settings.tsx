@@ -1,10 +1,32 @@
 import { useEffect, useState } from "react";
 import { hubClient as defaultHubClient } from "@/lib/hub-client-instance";
-import { HubClientError, type HubClient, type Provider } from "@/lib/hub-client";
+import { HubClientError, type HubClient, type Provider, type ProviderModel } from "@/lib/hub-client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/field";
 import { getErrorMessage } from "@/lib/error-message";
+
+// Substrings/prefixes that mark a model id as not chat-capable (per the
+// plan's Task 4 filter list): embedding, transcription (whisper), TTS
+// (kokoro), and reranker models never accept a chat/completions request,
+// and image models (flux and its variants) are a completely different
+// modality. This is a client-side convenience filter for the picker only
+// -- GET /api/v1/provider/models still returns the provider's raw,
+// unfiltered list, and the free-text chatModel field below always accepts
+// any id regardless of this filter.
+const NON_CHAT_SUBSTRINGS = ["embedding", "whisper", "kokoro", "rerank"];
+
+function isChatCapableModelId(id: string): boolean {
+  const lower = id.toLowerCase();
+  if (lower.startsWith("flux")) return false;
+  return !NON_CHAT_SUBSTRINGS.some((needle) => lower.includes(needle));
+}
+
+type ModelsState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "ready"; ids: string[] }
+  | { status: "error" };
 
 interface ProviderSettingsProps {
   client?: HubClient;
@@ -36,9 +58,27 @@ export function ProviderSettings({ client = defaultHubClient }: ProviderSettings
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [imageModel, setImageModel] = useState("");
+  const [chatModel, setChatModel] = useState("");
+  const [modelsState, setModelsState] = useState<ModelsState>({ status: "idle" });
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [savedMessage, setSavedMessage] = useState<string | null>(null);
+
+  async function loadModels() {
+    setModelsState({ status: "loading" });
+    try {
+      const models = await client.listProviderModels();
+      const ids = models.map((m: ProviderModel) => m.id).filter(isChatCapableModelId);
+      setModelsState({ status: "ready", ids });
+    } catch {
+      // Any failure here (no provider configured yet, provider
+      // unreachable, SSRF-guard rejection, etc.) just means the picker
+      // convenience isn't available -- the chatModel field above is
+      // already a plain, always-usable free-text input, so this
+      // degrades gracefully rather than blocking the form.
+      setModelsState({ status: "error" });
+    }
+  }
 
   async function load() {
     setState({ status: "loading" });
@@ -47,7 +87,16 @@ export function ProviderSettings({ client = defaultHubClient }: ProviderSettings
       setState({ status: "ready", provider });
       setBaseUrl(provider.baseUrl ?? "");
       setImageModel(provider.imageModel ?? "");
+      setChatModel(provider.chatModel ?? "");
       setApiKey("");
+      // The model list can only come from an already-configured provider
+      // (GET /api/v1/provider/models 400s otherwise) -- skip the call
+      // entirely rather than surfacing that as a picker-level error.
+      if (provider.baseUrl) {
+        await loadModels();
+      } else {
+        setModelsState({ status: "idle" });
+      }
     } catch (err) {
       if (isImagesDisabled(err)) {
         setState({ status: "disabled" });
@@ -80,6 +129,7 @@ export function ProviderSettings({ client = defaultHubClient }: ProviderSettings
         baseUrl: baseUrl.trim(),
         apiKey: apiKey.trim() || undefined,
         imageModel: imageModel.trim() || null,
+        chatModel: chatModel.trim() || null,
       });
       setSavedMessage("Provider settings saved.");
       await load();
@@ -105,6 +155,7 @@ export function ProviderSettings({ client = defaultHubClient }: ProviderSettings
       setBaseUrl("");
       setApiKey("");
       setImageModel("");
+      setChatModel("");
       setSavedMessage("Provider settings cleared.");
       await load();
     } catch (err) {
@@ -184,6 +235,43 @@ export function ProviderSettings({ client = defaultHubClient }: ProviderSettings
           value={imageModel}
           onChange={(event) => setImageModel(event.target.value)}
         />
+      </div>
+
+      <div className="space-y-1">
+        <Label htmlFor="provider-chat-model">Chat model</Label>
+        <Input
+          id="provider-chat-model"
+          name="chatModel"
+          placeholder="gpt-4o-mini"
+          value={chatModel}
+          onChange={(event) => setChatModel(event.target.value)}
+        />
+        {modelsState.status === "ready" && (
+          <>
+            <Label htmlFor="provider-chat-model-picker">Pick from provider's models</Label>
+            <select
+              id="provider-chat-model-picker"
+              aria-label="Pick from provider's models"
+              className="w-full rounded-lg border border-input bg-transparent px-3 py-1.5 text-sm"
+              value=""
+              onChange={(event) => {
+                if (event.target.value) setChatModel(event.target.value);
+              }}
+            >
+              <option value="">Select a model...</option>
+              {modelsState.ids.map((id) => (
+                <option key={id} value={id}>
+                  {id}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
+        {modelsState.status === "error" && (
+          <p className="text-xs text-muted-fg">
+            Couldn't fetch the provider's model list -- enter a chat model id above.
+          </p>
+        )}
       </div>
 
       {formError && (
