@@ -100,6 +100,19 @@ exposed to the network.
   `requireMachineOwnership` (see `apps/hub/src/auth/middleware.ts`), which
   enforces `machine.user_id === session.userId` and folds "not yours" and
   "doesn't exist" into the same 404 so ownership can't be probed.
+- **User management is admin-only; `requireAdmin` is the authorization boundary.**
+  Creating (`POST /api/v1/auth/invite`), listing (`GET /api/v1/users`), and
+  deleting (`DELETE /api/v1/users/:id`) users all run `requireUser` then
+  `requireAdmin` (`apps/hub/src/auth/middleware.ts`). Create generates a
+  one-time temp password returned exactly once and never persisted in
+  plaintext or logged; `listUsers` never selects `password_hash`; `/me`,
+  login, and bootstrap all return `isAdmin` so the web can gate the Users
+  section (that client gate is UX only — the server check is authoritative).
+  Two guards prevent an unrecoverable admin lockout, since roles can't be
+  granted through the UI: an admin cannot delete their own id via
+  `DELETE /api/v1/users/:id` (400), and `DELETE /api/v1/me` refuses (400)
+  when the caller is the last admin (`admins <= 1`) and other users remain
+  (`total > 1`) — a solo admin who is the only user can still self-erase.
 - **Secrets are hashed at rest, never stored or logged in plaintext.**
   - User passwords and machine tokens both use argon2id via `Bun.password`
     (`apps/hub/src/auth/password.ts`).
