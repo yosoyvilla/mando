@@ -186,6 +186,31 @@ describe("ImagesGallery", () => {
     expect(useEditSourceStore.getState().pendingEditSource).toBeNull();
   });
 
+  it("enlarge overlay: opens labelled and modal, closes on Escape, and restores focus to the trigger", async () => {
+    const client = stubClient({ listImages: mock(() => Promise.resolve([image()])) });
+    render(<ImagesGallery client={client} />);
+
+    const trigger = await screen.findByRole("button", { name: "Enlarge image: a cat" });
+    trigger.focus();
+    fireEvent.click(trigger);
+
+    const dialog = await screen.findByRole("dialog", { name: "Enlarged image: a cat" });
+    // Real modality: react-aria makes everything outside the overlay
+    // `inert` (removed from both the a11y tree and interaction) rather than
+    // relying on an `aria-modal` attribute -- see the doc comment above the
+    // overlay in images-gallery.tsx for why.
+    expect(document.querySelector("[inert]")).not.toBeNull();
+
+    fireEvent.keyDown(dialog, { key: "Escape" });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+    await waitFor(() => {
+      expect(trigger).toHaveFocus();
+    });
+  });
+
   it("deletes an image and removes it from the gallery", async () => {
     const client = stubClient({ listImages: mock(() => Promise.resolve([image()])) });
     render(<ImagesGallery client={client} />);

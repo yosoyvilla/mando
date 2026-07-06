@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { ModalOverlay, Modal } from "react-aria-components";
 import { hubClient as defaultHubClient } from "@/lib/hub-client-instance";
 import { HubClientError, type GeneratedImage, type HubClient } from "@/lib/hub-client";
 import { validate as validateAttachment } from "@/lib/attachments";
@@ -6,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/field";
 import { Link } from "@/components/ui/link";
+import { Dialog } from "@/components/ui/dialog";
 import { ArrowPathIcon, IconPen, SendIcon, TrashIcon } from "@/components/icons/lucide";
 import {
   Select,
@@ -499,22 +501,50 @@ export function ImagesGallery({ client = defaultHubClient }: ImagesGalleryProps)
         />
       )}
 
-      {enlarged && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="Enlarged image"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
-          onClick={() => setEnlarged(null)}
-        >
-          <img
-            src={client.imageRawUrl(enlarged.id)}
-            alt={enlarged.prompt ?? "Generated image"}
-            className="max-h-full max-w-full rounded-lg"
-            onClick={(event) => event.stopPropagation()}
-          />
-        </div>
-      )}
+      {/* Task 6 (A11Y-OVERLAY): react-aria's ModalOverlay/Modal/Dialog --
+          already used elsewhere in this codebase for SheetContent/
+          SendToSessionDialog -- replaces the old plain `<div role="dialog">`
+          click-catcher. It gets focus-trap-while-open, Escape-to-close, and
+          focus-restore-to-the-trigger-on-close for free, all three of which
+          the plain div never had (Escape did nothing, focus could tab out
+          into the page behind it, and closing left focus wherever the
+          browser happened to put it). `isOpen`/`onOpenChange` stay
+          controlled by `enlarged` so every existing open/close call site
+          (the per-item "Enlarge image" button, handleDelete's cleanup)
+          keeps working unchanged.
+
+          No explicit `aria-modal="true"` prop: react-aria deliberately
+          does not set that attribute (Dialog.js's filterDOMProps({global:
+          true}) strips it even if passed) because aria-modal has
+          inconsistent/buggy screen-reader support. Modality is instead
+          enforced natively -- everything outside the overlay gets a real
+          `inert` attribute (see the rendered `<div inert>` wrapper),
+          which is stronger than an aria-modal hint: it actually removes
+          the rest of the page from the accessibility tree AND from
+          keyboard/pointer interaction, not just labels it. */}
+      <ModalOverlay
+        isOpen={!!enlarged}
+        onOpenChange={(open) => {
+          if (!open) setEnlarged(null);
+        }}
+        isDismissable
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+      >
+        <Modal className="max-h-full max-w-full outline-none">
+          <Dialog
+            aria-label={enlarged ? `Enlarged image: ${enlarged.prompt ?? enlarged.id}` : "Enlarged image"}
+            className="outline-none"
+          >
+            {enlarged && (
+              <img
+                src={client.imageRawUrl(enlarged.id)}
+                alt={enlarged.prompt ?? "Generated image"}
+                className="max-h-full max-w-full rounded-lg"
+              />
+            )}
+          </Dialog>
+        </Modal>
+      </ModalOverlay>
     </div>
   );
 }
