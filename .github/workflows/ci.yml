@@ -11,7 +11,28 @@ env:
   TEST_DATABASE_URL: postgres://mando:mando@localhost:5432/mando
 
 jobs:
+  # Detect docs-only changes so pure-documentation PRs can skip the heavy
+  # test/e2e jobs. A top-level paths-ignore cannot express "skip on feature
+  # branches but always run on main", so the heavy jobs gate on this output
+  # AND on the branch instead (see their `if:`).
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      non_docs: ${{ steps.filter.outputs.non_docs }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Filter paths
+        id: filter
+        uses: dorny/paths-filter@v4.0.2
+        with:
+          filters: |
+            non_docs:
+              - '!(**/*.md|docs/**|assets/**|.github/ISSUE_TEMPLATE/**|LICENSE)'
+
   test:
+    needs: changes
+    if: ${{ github.ref == 'refs/heads/main' || needs.changes.outputs.non_docs == 'true' }}
     runs-on: ubuntu-latest
 
     services:
@@ -82,6 +103,8 @@ jobs:
   # a step in `test`) so a real-opencode flake never blocks the fast
   # unit/integration/stub-e2e signal.
   e2e-real-opencode:
+    needs: changes
+    if: ${{ github.ref == 'refs/heads/main' || needs.changes.outputs.non_docs == 'true' }}
     runs-on: ubuntu-latest
 
     services:
