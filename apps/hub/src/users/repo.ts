@@ -43,3 +43,39 @@ export async function deleteUser(sql: Sql, userId: string): Promise<boolean> {
   const rows = await sql`delete from users where id = ${userId} returning id`;
   return rows.length > 0;
 }
+
+export type AdminUserRow = { id: string; email: string; is_admin: boolean; created_at: string };
+
+// Lists every user for the admin user-management page. Ordered oldest-first
+// so the bootstrap admin sorts to the top and the list is stable across
+// calls. Never selects password_hash -- this feeds a client response.
+export async function listUsers(sql: Sql): Promise<AdminUserRow[]> {
+  const rows = await sql`
+    select id, email, is_admin, created_at
+    from users
+    order by created_at asc
+  `;
+  // The postgres driver parses timestamptz columns into JS Date objects,
+  // not strings -- normalize to ISO strings here so AdminUserRow's
+  // `created_at: string` contract holds for callers that use this value
+  // directly (not just ones that round-trip it through JSON, where Date's
+  // toJSON would paper over the mismatch).
+  return rows.map((r) => ({
+    id: r.id as string,
+    email: r.email as string,
+    is_admin: r.is_admin as boolean,
+    created_at: (r.created_at as Date).toISOString(),
+  }));
+}
+
+// Total user count and how many of them are admins, in one query -- used by
+// the DELETE /api/v1/me last-admin guard to decide whether a self-erasure
+// would strand the instance with users but no admin.
+export async function countUsersAndAdmins(sql: Sql): Promise<{ total: number; admins: number }> {
+  const [row] = await sql`
+    select count(*)::int as total,
+           count(*) filter (where is_admin)::int as admins
+    from users
+  `;
+  return { total: row.total as number, admins: row.admins as number };
+}
