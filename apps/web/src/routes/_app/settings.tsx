@@ -2,7 +2,7 @@ import * as React from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useTheme } from "@/providers/theme-provider";
 import { useBreadcrumb } from "@/contexts/breadcrumb-context";
-import { SwatchIcon, CpuChipIcon, KeyIcon } from "@/components/icons/lucide";
+import { SwatchIcon, CpuChipIcon, KeyIcon, IconUser } from "@/components/icons/lucide";
 import {
   Select,
   SelectContent,
@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabList, Tab, TabPanel } from "@/components/ui/tabs";
 import { ProviderSettings } from "@/components/provider-settings";
+import { ChangePassword } from "@/components/change-password";
 
 const themes = [
   { id: "light", title: "Light" },
@@ -91,6 +92,10 @@ function SettingsPage() {
           <Tab id="provider">
             <KeyIcon className="size-4" data-slot="icon" />
             Provider
+          </Tab>
+          <Tab id="account">
+            <IconUser className="size-4" data-slot="icon" />
+            Account
           </Tab>
         </TabList>
 
@@ -178,6 +183,20 @@ function SettingsPage() {
             </div>
 
             <ProviderSettings />
+          </div>
+        </TabPanel>
+
+        <TabPanel id="account" className="pt-6">
+          <div className="space-y-6">
+            <div>
+              <h2 className="text-lg font-semibold">Account</h2>
+              <p className="text-sm text-muted-fg">
+                Change your password. This signs out your other sessions; the
+                one you're using stays signed in.
+              </p>
+            </div>
+
+            <ChangePassword />
           </div>
         </TabPanel>
       </Tabs>

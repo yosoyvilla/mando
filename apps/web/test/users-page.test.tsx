@@ -137,4 +137,98 @@ describe("UsersAdmin", () => {
       expect(client.adminDeleteUser).toHaveBeenCalledWith("u2");
     });
   });
+
+  it("shows 'Make admin' on a non-admin row, which calls setUserAdmin(id,true) and refreshes the list", async () => {
+    const users = [
+      adminUser({ id: "u1", email: "me@example.com", isAdmin: true }),
+      adminUser({ id: "u2", email: "other@example.com", isAdmin: false }),
+    ];
+    const listUsers = mock(() => Promise.resolve(users));
+    const client = stubClient({
+      listUsers,
+      setUserAdmin: mock(() => Promise.resolve({ id: "u2", email: "other@example.com", isAdmin: true })),
+    });
+
+    render(<UsersAdmin client={client} currentUserId="u1" />);
+    await screen.findByText("other@example.com");
+    expect(listUsers).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: /Make admin: other@example.com/ }));
+
+    await waitFor(() => {
+      expect(client.setUserAdmin).toHaveBeenCalledWith("u2", true);
+    });
+    // For a non-self row, the list is reloaded via load() rather than refresh().
+    await waitFor(() => {
+      expect(listUsers).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("shows 'Remove admin' on an admin (non-self) row, which calls setUserAdmin(id,false)", async () => {
+    const users = [
+      adminUser({ id: "u1", email: "me@example.com", isAdmin: true }),
+      adminUser({ id: "u2", email: "other-admin@example.com", isAdmin: true }),
+    ];
+    const client = stubClient({
+      listUsers: mock(() => Promise.resolve(users)),
+      setUserAdmin: mock(() => Promise.resolve({ id: "u2", email: "other-admin@example.com", isAdmin: false })),
+    });
+
+    render(<UsersAdmin client={client} currentUserId="u1" />);
+    await screen.findByText("other-admin@example.com");
+
+    fireEvent.click(screen.getByRole("button", { name: /Remove admin: other-admin@example.com/ }));
+
+    await waitFor(() => {
+      expect(client.setUserAdmin).toHaveBeenCalledWith("u2", false);
+    });
+  });
+
+  it("surfaces a last-admin 400 from setUserAdmin without crashing", async () => {
+    const users = [
+      adminUser({ id: "u1", email: "me@example.com", isAdmin: true }),
+    ];
+    const client = stubClient({
+      listUsers: mock(() => Promise.resolve(users)),
+      setUserAdmin: mock(() => Promise.reject(new HubClientError("cannot remove the last admin", 400))),
+    });
+
+    render(<UsersAdmin client={client} currentUserId="u1" />);
+    await screen.findByText("me@example.com");
+
+    fireEvent.click(screen.getByRole("button", { name: /Remove admin: me@example.com/ }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("cannot remove the last admin");
+    });
+    // Did not crash: the row is still present and usable.
+    expect(screen.getByText("me@example.com")).toBeInTheDocument();
+  });
+
+  it("on a successful self-demote, calls refresh() first and does NOT reload the list via load()", async () => {
+    const users = [adminUser({ id: "u1", email: "me@example.com", isAdmin: true })];
+    const listUsers = mock(() => Promise.resolve(users));
+    const refresh = mock(() => Promise.resolve());
+    const client = stubClient({
+      listUsers,
+      setUserAdmin: mock(() => Promise.resolve({ id: "u1", email: "me@example.com", isAdmin: false })),
+    });
+
+    render(<UsersAdmin client={client} currentUserId="u1" refresh={refresh} />);
+    await screen.findByText("me@example.com");
+    expect(listUsers).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: /Remove admin: me@example.com/ }));
+
+    await waitFor(() => {
+      expect(client.setUserAdmin).toHaveBeenCalledWith("u1", false);
+    });
+    await waitFor(() => {
+      expect(refresh).toHaveBeenCalledTimes(1);
+    });
+    // Self-demote must not trigger a load()/listUsers() re-fetch -- that
+    // would 403 for the now-non-admin actor (see users.tsx's
+    // handleToggleAdmin comment).
+    expect(listUsers).toHaveBeenCalledTimes(1);
+  });
 });

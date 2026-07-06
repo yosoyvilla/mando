@@ -21,7 +21,7 @@ export const Route = createFileRoute("/_app/users")({
 });
 
 function UsersPage() {
-  const { user } = useAuth();
+  const { user, refresh } = useAuth();
   const { setPageTitle } = useBreadcrumb();
 
   useEffect(() => {
@@ -30,7 +30,7 @@ function UsersPage() {
   }, [setPageTitle]);
 
   if (!user?.isAdmin) return <Navigate to="/" />;
-  return <UsersAdmin currentUserId={user.id} />;
+  return <UsersAdmin currentUserId={user.id} refresh={refresh} />;
 }
 
 type ListState =
@@ -41,6 +41,11 @@ type ListState =
 interface UsersAdminProps {
   client?: HubClient;
   currentUserId: string;
+  // Refreshes the auth context's `user` after the acting admin changes
+  // their own role (see handleToggleAdmin's self-demote branch below).
+  // Defaults to a no-op so existing tests/callers that don't pass one
+  // still work.
+  refresh?: () => Promise<void>;
 }
 
 function formatCreatedAt(iso: string): string {
@@ -55,7 +60,11 @@ function formatCreatedAt(iso: string): string {
 // own state (never persisted, never re-fetched) and rendered in a clearly
 // bounded panel with a Copy action until the admin creates the next user or
 // navigates away.
-export function UsersAdmin({ client = defaultHubClient, currentUserId }: UsersAdminProps) {
+export function UsersAdmin({
+  client = defaultHubClient,
+  currentUserId,
+  refresh = async () => {},
+}: UsersAdminProps) {
   const [state, setState] = useState<ListState>({ status: "loading" });
   const [email, setEmail] = useState("");
   const [creating, setCreating] = useState(false);
@@ -65,6 +74,8 @@ export function UsersAdmin({ client = defaultHubClient, currentUserId }: UsersAd
   const [pendingDelete, setPendingDelete] = useState<AdminUser | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [roleError, setRoleError] = useState<string | null>(null);
+  const [roleUpdatingId, setRoleUpdatingId] = useState<string | null>(null);
   const dialogHeadingId = useId();
 
   const load = useCallback(async () => {
@@ -132,6 +143,31 @@ export function UsersAdmin({ client = defaultHubClient, currentUserId }: UsersAd
       setDeleteError(getErrorMessage(err) ?? "Failed to delete user.");
     } finally {
       setDeleting(false);
+    }
+  }
+
+  async function handleToggleAdmin(u: AdminUser) {
+    if (roleUpdatingId) return;
+
+    const nextIsAdmin = !u.isAdmin;
+    setRoleError(null);
+    setRoleUpdatingId(u.id);
+    try {
+      await client.setUserAdmin(u.id, nextIsAdmin);
+      if (u.id === currentUserId && !nextIsAdmin) {
+        // Self-demote: `requireAdmin` re-reads the DB on every request, so
+        // a load() (listUsers()) right after this would 403 for the now
+        // non-admin actor and flash an error right before UsersPage's
+        // `!user?.isAdmin` guard redirects them home. Refresh the auth
+        // context instead -- that's what triggers the redirect.
+        await refresh();
+      } else {
+        await load();
+      }
+    } catch (err) {
+      setRoleError(getErrorMessage(err) ?? "Failed to update role.");
+    } finally {
+      setRoleUpdatingId(null);
     }
   }
 
@@ -203,6 +239,15 @@ export function UsersAdmin({ client = defaultHubClient, currentUserId }: UsersAd
       <div className="space-y-3">
         <h2 className="text-lg font-semibold">All users</h2>
 
+        {roleError && (
+          <div
+            role="alert"
+            className="rounded-md bg-danger-subtle px-3 py-2 text-sm text-danger-subtle-fg"
+          >
+            {roleError}
+          </div>
+        )}
+
         {state.status === "loading" && (
           <p className="text-sm text-muted-fg">Loading users...</p>
         )}
@@ -231,22 +276,34 @@ export function UsersAdmin({ client = defaultHubClient, currentUserId }: UsersAd
                   </div>
                   <p className="text-xs text-muted-fg">Joined {formatCreatedAt(u.createdAt)}</p>
                 </div>
-                {u.id === currentUserId ? (
-                  <span className="shrink-0 text-xs text-muted-fg">This is you</span>
-                ) : (
+                <div className="flex shrink-0 items-center gap-2">
                   <Button
                     type="button"
                     size="xs"
-                    intent="danger"
-                    aria-label={`Delete user: ${u.email}`}
-                    onPress={() => {
-                      setDeleteError(null);
-                      setPendingDelete(u);
-                    }}
+                    intent="outline"
+                    aria-label={`${u.isAdmin ? "Remove admin" : "Make admin"}: ${u.email}`}
+                    onPress={() => handleToggleAdmin(u)}
+                    isDisabled={roleUpdatingId === u.id}
                   >
-                    Delete
+                    {u.isAdmin ? "Remove admin" : "Make admin"}
                   </Button>
-                )}
+                  {u.id === currentUserId ? (
+                    <span className="text-xs text-muted-fg">This is you</span>
+                  ) : (
+                    <Button
+                      type="button"
+                      size="xs"
+                      intent="danger"
+                      aria-label={`Delete user: ${u.email}`}
+                      onPress={() => {
+                        setDeleteError(null);
+                        setPendingDelete(u);
+                      }}
+                    >
+                      Delete
+                    </Button>
+                  )}
+                </div>
               </li>
             ))}
           </ul>
