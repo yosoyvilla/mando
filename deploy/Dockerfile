@@ -71,6 +71,15 @@ COPY --from=builder /app/apps/web/dist ./apps/web/dist
 
 EXPOSE 8080
 
+# The default image directory for the Images feature (MANDO_IMAGE_DIR).
+# Create it owned by the non-root `bun` user BEFORE declaring it a volume:
+# Docker seeds a fresh named volume from the image's directory (contents AND
+# ownership) on first mount, so this makes the mounted volume writable by
+# uid 1000. Without it the volume is created root-owned and image writes fail
+# with EACCES once the container drops to USER bun.
+RUN mkdir -p /data/images && chown -R bun:bun /data
+VOLUME ["/data/images"]
+
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
   CMD bun -e "fetch('http://localhost:'+(Bun.env.PORT||8080)+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
