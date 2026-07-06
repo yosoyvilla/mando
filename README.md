@@ -413,9 +413,10 @@ For uptime monitoring, point an external checker — [healthchecks.io](https://h
 ## Managing users and machines
 
 - **The first user** is the admin you create with `MANDO_ADMIN_EMAIL` / `MANDO_ADMIN_PASSWORD`.
-- **Adding people:** an admin can invite additional users. Inviting is restricted to admins, so ordinary users cannot create accounts.
+- **Each user gets an isolated workspace.** Machines, sessions, provider settings, generated images, and chat conversations are all scoped to the user who owns them — one user never sees another's data.
+- **Adding people:** an admin sees a **Users** section in the web interface (hidden for everyone else) to create, list, and remove accounts. Creating a user takes only an email; the hub generates a one-time temporary password and shows it to the admin **once** — copy it and pass it to the new user, who signs in with it. It is never shown again. There is no self-service password change yet, so treat that password as the account's password.
 - **Removing a machine:** revoke it from the web interface. Revocation immediately drops the machine's live connection and invalidates its token, so it can no longer reach the hub until it pairs again.
-- **Deleting an account:** a user can delete their own account, and an admin can delete another user's account. Deleting an account removes that user and all of their machines, tokens, sessions, and pairing records.
+- **Deleting an account:** a user can delete their own account, and an admin can delete another user's account from the Users section. Deleting an account removes that user and all of their machines, tokens, sessions, and pairing records. Two safeguards prevent locking everyone out of admin: an admin cannot delete their own account from the Users section, and the last remaining admin cannot delete their own account while other users still exist. Deleting your own account is available through the API (`DELETE /api/v1/me`) but has no button in the web interface yet.
 - **Audit trail:** security-relevant events (logins, pairing approvals, revocations, account deletions, and invites) are recorded in an append-only audit log that admins can review. The audit trail is deliberately kept even when a user is deleted.
 
 ## Security model

@@ -289,3 +289,145 @@ test("bootstrap creates the admin with is_admin true (rolled back)", async () =>
     if (e !== RollbackMarker) throw e;
   }
 });
+
+test("GET /api/v1/me includes isAdmin for an admin and a non-admin", async () => {
+  const admin = await createUser(sql, uniqueEmail("me-admin"), "correct-password", { isAdmin: true });
+  const plain = await createUser(sql, uniqueEmail("me-plain"), "correct-password");
+  const app = buildApp({ sql, config });
+
+  const adminSession = await createSession(sql, admin.id);
+  const adminRes = await app.request("/api/v1/me", { headers: { Cookie: `mando_sess=${adminSession}` } });
+  expect(adminRes.status).toBe(200);
+  expect((await adminRes.json()).isAdmin).toBe(true);
+
+  const plainSession = await createSession(sql, plain.id);
+  const plainRes = await app.request("/api/v1/me", { headers: { Cookie: `mando_sess=${plainSession}` } });
+  expect((await plainRes.json()).isAdmin).toBe(false);
+});
+
+test("login response includes isAdmin", async () => {
+  const email = uniqueEmail("login-isadmin");
+  await createUser(sql, email, "correct-password", { isAdmin: true });
+  const app = buildApp({ sql, config });
+  const res = await app.request("/api/v1/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password: "correct-password" }),
+  });
+  expect(res.status).toBe(200);
+  expect((await res.json()).user.isAdmin).toBe(true);
+});
+
+test("GET /api/v1/users returns all users for an admin", async () => {
+  const admin = await createUser(sql, uniqueEmail("list-admin"), "correct-password", { isAdmin: true });
+  const other = await createUser(sql, uniqueEmail("list-other"), "correct-password");
+  const sessionId = await createSession(sql, admin.id);
+  const app = buildApp({ sql, config });
+
+  const res = await app.request("/api/v1/users", { headers: { Cookie: `mando_sess=${sessionId}` } });
+  expect(res.status).toBe(200);
+  const body = await res.json();
+  const ids = body.users.map((u: { id: string }) => u.id);
+  expect(ids).toContain(admin.id);
+  expect(ids).toContain(other.id);
+  const adminRow = body.users.find((u: { id: string }) => u.id === admin.id);
+  expect(adminRow.isAdmin).toBe(true);
+  expect(typeof adminRow.createdAt).toBe("string");
+  expect(adminRow.passwordHash).toBeUndefined();
+  expect(adminRow.password_hash).toBeUndefined();
+});
+
+test("GET /api/v1/users from a non-admin returns 403", async () => {
+  const plain = await createUser(sql, uniqueEmail("list-nonadmin"), "correct-password");
+  const sessionId = await createSession(sql, plain.id);
+  const app = buildApp({ sql, config });
+  const res = await app.request("/api/v1/users", { headers: { Cookie: `mando_sess=${sessionId}` } });
+  expect(res.status).toBe(403);
+});
+
+test("GET /api/v1/users without a session returns 401", async () => {
+  const app = buildApp({ sql, config });
+  const res = await app.request("/api/v1/users");
+  expect(res.status).toBe(401);
+});
+
+test("DELETE /api/v1/users/:id refuses when an admin targets their own id", async () => {
+  const admin = await createUser(sql, uniqueEmail("del-self"), "correct-password", { isAdmin: true });
+  const sessionId = await createSession(sql, admin.id);
+  const app = buildApp({ sql, config });
+  const res = await app.request(`/api/v1/users/${admin.id}`, {
+    method: "DELETE",
+    headers: { Cookie: `mando_sess=${sessionId}` },
+  });
+  expect(res.status).toBe(400);
+  // The admin must still exist (and stay logged in) after the refused self-delete.
+  const check = await app.request("/api/v1/me", { headers: { Cookie: `mando_sess=${sessionId}` } });
+  expect(check.status).toBe(200);
+});
+
+test("DELETE /api/v1/users/:id from an admin deletes another user", async () => {
+  const admin = await createUser(sql, uniqueEmail("del-admin"), "correct-password", { isAdmin: true });
+  const victim = await createUser(sql, uniqueEmail("del-victim"), "correct-password");
+  const sessionId = await createSession(sql, admin.id);
+  const app = buildApp({ sql, config });
+  const res = await app.request(`/api/v1/users/${victim.id}`, {
+    method: "DELETE",
+    headers: { Cookie: `mando_sess=${sessionId}` },
+  });
+  expect(res.status).toBe(200);
+  expect(await findUserByEmail(sql, victim.email)).toBeNull();
+});
+
+// Last-admin self-erasure guard. MUST use the rolled-back-transaction trick:
+// the shared test DB already contains multiple admins from other suites, so
+// `admins <= 1` is only ever true inside an isolated `delete from users` tx.
+test("DELETE /api/v1/me refuses the last admin while other users exist (rolled back)", async () => {
+  const RollbackMarker = Symbol("rollback");
+  try {
+    await sql.begin(async (tx) => {
+      await tx`delete from users`;
+      const t = tx as unknown as typeof sql;
+      const admin = await createUser(t, uniqueEmail("me-last-admin"), "correct-password", { isAdmin: true });
+      await createUser(t, uniqueEmail("me-other"), "correct-password"); // a non-admin remains
+      const sessionId = await createSession(t, admin.id);
+      const app = buildApp({ sql: t, config });
+
+      const res = await app.request("/api/v1/me", {
+        method: "DELETE",
+        headers: { Cookie: `mando_sess=${sessionId}` },
+      });
+      expect(res.status).toBe(400);
+      // Admin still present.
+      const check = await app.request("/api/v1/me", { headers: { Cookie: `mando_sess=${sessionId}` } });
+      expect(check.status).toBe(200);
+
+      throw RollbackMarker;
+    });
+  } catch (e) {
+    if (e !== RollbackMarker) throw e;
+  }
+});
+
+test("DELETE /api/v1/me allows a solo admin who is the only user to self-erase (rolled back)", async () => {
+  const RollbackMarker = Symbol("rollback");
+  try {
+    await sql.begin(async (tx) => {
+      await tx`delete from users`;
+      const t = tx as unknown as typeof sql;
+      const admin = await createUser(t, uniqueEmail("me-solo-admin"), "correct-password", { isAdmin: true });
+      const sessionId = await createSession(t, admin.id);
+      const app = buildApp({ sql: t, config });
+
+      const res = await app.request("/api/v1/me", {
+        method: "DELETE",
+        headers: { Cookie: `mando_sess=${sessionId}` },
+      });
+      expect(res.status).toBe(200);
+      expect(await findUserByEmail(t, admin.email)).toBeNull();
+
+      throw RollbackMarker;
+    });
+  } catch (e) {
+    if (e !== RollbackMarker) throw e;
+  }
+});

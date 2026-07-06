@@ -11,6 +11,16 @@ import { getResponseErrorMessage } from "@/lib/error-message";
 export type HubUser = {
   id: string;
   email: string;
+  isAdmin: boolean;
+};
+
+// Matches GET /api/v1/users' `users[]` shape in apps/hub/src/users/routes.ts.
+// Never includes password material -- the hub's listUsers repo fn omits it.
+export type AdminUser = {
+  id: string;
+  email: string;
+  isAdmin: boolean;
+  createdAt: string;
 };
 
 // Matches machineRoutes' `serializeMachine()` in apps/hub/src/machines/routes.ts
@@ -164,6 +174,12 @@ export interface HubClient {
   login(email: string, password: string): Promise<{ user: HubUser }>;
   logout(): Promise<void>;
   me(): Promise<HubUser | null>;
+  // Admin-only (backend requireAdmin). createUser maps to POST
+  // /api/v1/auth/invite: the hub generates a one-time temp password and
+  // returns it exactly once -- it is never retrievable afterwards.
+  createUser(email: string): Promise<{ user: { id: string; email: string }; tempPassword: string }>;
+  listUsers(): Promise<AdminUser[]>;
+  adminDeleteUser(id: string): Promise<void>;
   listMachines(): Promise<Machine[]>;
   getMachine(id: string): Promise<Machine>;
   revokeMachine(id: string): Promise<void>;
@@ -364,6 +380,28 @@ export function createHubClient(options: HubClientOptions = {}): HubClient {
       const res = await request("/api/v1/me");
       if (res.status === 401) return null;
       return parseOrThrow<HubUser>(res, "me");
+    },
+
+    async createUser(email) {
+      const res = await request("/api/v1/auth/invite", {
+        method: "POST",
+        body: JSON.stringify({ email }),
+      });
+      return parseOrThrowWithMessage<{ user: { id: string; email: string }; tempPassword: string }>(
+        res,
+        "createUser failed",
+      );
+    },
+
+    async listUsers() {
+      const res = await request("/api/v1/users");
+      const data = await parseOrThrowWithMessage<{ users: AdminUser[] }>(res, "listUsers failed");
+      return data.users;
+    },
+
+    async adminDeleteUser(id) {
+      const res = await request(`/api/v1/users/${id}`, { method: "DELETE" });
+      await parseOrThrowWithMessage(res, "adminDeleteUser failed");
     },
 
     async listMachines() {

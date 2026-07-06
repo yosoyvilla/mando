@@ -2,7 +2,7 @@ import { Hono, type Context } from "hono";
 import { setCookie, deleteCookie, getCookie } from "hono/cookie";
 import { z } from "zod";
 import type postgres from "postgres";
-import { createUser, deleteUser, findUserByEmail, findUserById } from "./repo";
+import { countUsersAndAdmins, createUser, deleteUser, findUserByEmail, findUserById, listUsers } from "./repo";
 import { verifySecret, DUMMY_HASH } from "../auth/password";
 import { createSession, destroySession, readSession } from "../auth/session";
 import { requireUser, requireAdmin, type AuthVariables } from "../auth/middleware";
@@ -105,7 +105,7 @@ export function userRoutes(sql: Sql, registry: Registry): Hono<{ Variables: Auth
     const sessionId = await createSession(sql, user.id);
     setSessionCookie(c, sessionId);
     await logAudit(sql, { eventType: "login_success", actorUserId: user.id, ip: clientIp(c) });
-    return c.json({ user: { id: user.id, email: user.email } }, 200);
+    return c.json({ user: { id: user.id, email: user.email, isAdmin: user.is_admin } }, 200);
   });
 
   app.post("/api/v1/auth/logout", async (c) => {
@@ -131,6 +131,18 @@ export function userRoutes(sql: Sql, registry: Registry): Hono<{ Variables: Auth
   // insert itself failing the FK check.
   app.delete("/api/v1/me", requireUser(sql), async (c) => {
     const userId = c.get("userId");
+    const me = await findUserById(sql, userId);
+    if (me?.is_admin) {
+      const { total, admins } = await countUsersAndAdmins(sql);
+      // Blocking here prevents an unrecoverable state: if the last admin
+      // self-erased while other users remained, bootstrap stays 409 forever
+      // (it refuses once any user exists) and no one could regain admin. A
+      // solo admin who is the only user is still free to erase (total <= 1),
+      // since that empties the table and reopens bootstrap.
+      if (admins <= 1 && total > 1) {
+        return c.json({ error: "cannot delete the last admin while other users exist" }, 400);
+      }
+    }
     await closeUserTunnels(sql, registry, userId);
     await logAudit(sql, { eventType: "user_deleted_self", actorUserId: userId, ip: clientIp(c) });
     await deleteUser(sql, userId);
@@ -145,6 +157,9 @@ export function userRoutes(sql: Sql, registry: Registry): Hono<{ Variables: Auth
   // for either.
   app.delete("/api/v1/users/:id", requireUser(sql), requireAdmin(sql), async (c) => {
     const targetId = c.req.param("id");
+    if (targetId === c.get("userId")) {
+      return c.json({ error: "cannot delete your own admin account here" }, 400);
+    }
     await closeUserTunnels(sql, registry, targetId);
     const deleted = await deleteUser(sql, targetId);
     if (!deleted) return c.json({ error: "not found" }, 404);
@@ -161,7 +176,22 @@ export function userRoutes(sql: Sql, registry: Registry): Hono<{ Variables: Auth
   app.get("/api/v1/me", requireUser(sql), async (c) => {
     const user = await findUserById(sql, c.get("userId"));
     if (!user) return c.json({ error: "unauthorized" }, 401);
-    return c.json({ id: user.id, email: user.email }, 200);
+    return c.json({ id: user.id, email: user.email, isAdmin: user.is_admin }, 200);
+  });
+
+  app.get("/api/v1/users", requireUser(sql), requireAdmin(sql), async (c) => {
+    const users = await listUsers(sql);
+    return c.json(
+      {
+        users: users.map((u) => ({
+          id: u.id,
+          email: u.email,
+          isAdmin: u.is_admin,
+          createdAt: u.created_at,
+        })),
+      },
+      200,
+    );
   });
 
   app.post("/api/v1/auth/bootstrap", async (c) => {
@@ -177,7 +207,7 @@ export function userRoutes(sql: Sql, registry: Registry): Hono<{ Variables: Auth
     // the admin-gated /api/v1/auth/invite below.
     const user = await createUser(sql, email, password, { isAdmin: true });
     await logAudit(sql, { eventType: "bootstrap_admin", actorUserId: user.id, ip: clientIp(c) });
-    return c.json({ user: { id: user.id, email: user.email } }, 201);
+    return c.json({ user: { id: user.id, email: user.email, isAdmin: user.is_admin } }, 201);
   });
 
   // requireAdmin (after requireUser) closes M4: previously *any*

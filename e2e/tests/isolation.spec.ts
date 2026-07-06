@@ -6,12 +6,13 @@ import { login } from "../fixtures/ui-helpers";
 // Cross-user isolation. User B is created via POST /api/v1/auth/invite
 // (requires an authenticated admin -- see apps/hub/src/users/routes.ts;
 // POST /api/v1/auth/bootstrap only works while zero users exist, which is
-// already false by the time any spec runs) rather than through a web UI
-// invite flow, because there isn't one -- the SPA has no invite screen,
-// only the API endpoint. The invite response's `tempPassword` is what a
-// real invited user would receive out-of-band and use for their first
-// login, so logging in with it through the real LoginView is still an
-// end-to-end check of the *login* half of isolation.
+// already false by the time any spec runs) rather than through the SPA's
+// own invite form (see routes/_app/users.tsx, covered end-to-end by
+// users-admin.spec.ts), because setting up user B is plumbing for *this*
+// test, not the thing it's asserting. The invite response's
+// `tempPassword` is what a real invited user would receive out-of-band and
+// use for their first login, so logging in with it through the real
+// LoginView is still an end-to-end check of the *login* half of isolation.
 //
 // "Direct navigation to A's machine session URL" (per the task brief) has
 // no literal web route to drive: apps/web's router has no
