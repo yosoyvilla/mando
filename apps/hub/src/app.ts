@@ -83,6 +83,7 @@ export type AppDeps = {
     wsAgent?: RateLimitConfig;
     images?: RateLimitConfig;
     chat?: RateLimitConfig;
+    passwordChange?: RateLimitConfig;
   };
   // Overrides images/provider-client.ts's SSRF guard for the images
   // routes only -- unset (the production default) uses the real guard.
@@ -150,6 +151,7 @@ export function buildApp(deps: AppDeps): Hono<{ Variables: AuthVariables }> {
   // runs -- same "route-specific bodyLimit ahead of the app-level backstop"
   // shape as images/edits' IMAGE_MAX_BYTES limit above.
   app.use("/api/v1/chat/conversations/:id/messages", bodyLimit({ maxSize: MAX_MESSAGE_BODY_BYTES }));
+  app.use("/api/v1/me/password", createRateLimiter(rateLimits.passwordChange ?? DEFAULT_RATE_LIMITS.passwordChange));
 
   app.route("/", userRoutes(deps.sql, registry));
   app.route("/", pairingRoutes(deps.sql));

@@ -2,9 +2,19 @@ import { Hono, type Context } from "hono";
 import { setCookie, deleteCookie, getCookie } from "hono/cookie";
 import { z } from "zod";
 import type postgres from "postgres";
-import { countUsersAndAdmins, createUser, deleteUser, findUserByEmail, findUserById, listUsers } from "./repo";
-import { verifySecret, DUMMY_HASH } from "../auth/password";
-import { createSession, destroySession, readSession } from "../auth/session";
+import {
+  countUsersAndAdmins,
+  createUser,
+  deleteUser,
+  findUserByEmail,
+  findUserById,
+  getPasswordHash,
+  listUsers,
+  setUserAdmin,
+  updatePasswordHash,
+} from "./repo";
+import { verifySecret, hashSecret, DUMMY_HASH } from "../auth/password";
+import { createSession, destroySession, readSession, deleteOtherSessions } from "../auth/session";
 import { requireUser, requireAdmin, type AuthVariables } from "../auth/middleware";
 import { listMachines } from "../machines/repo";
 import type { Registry } from "../tunnel/registry";
@@ -28,6 +38,15 @@ const bootstrapSchema = z.object({
 
 const inviteSchema = z.object({
   email: z.email(),
+});
+
+const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1),
+  newPassword: z.string().min(8),
+});
+
+const setAdminSchema = z.object({
+  isAdmin: z.boolean(),
 });
 
 async function parseJsonBody(c: Context): Promise<unknown> {
@@ -179,6 +198,32 @@ export function userRoutes(sql: Sql, registry: Registry): Hono<{ Variables: Auth
     return c.json({ id: user.id, email: user.email, isAdmin: user.is_admin }, 200);
   });
 
+  app.post("/api/v1/me/password", requireUser(sql), async (c) => {
+    const parsed = changePasswordSchema.safeParse(await parseJsonBody(c));
+    if (!parsed.success) return c.json({ error: "invalid request" }, 400);
+    const { currentPassword, newPassword } = parsed.data;
+    const userId = c.get("userId");
+
+    const hash = await getPasswordHash(sql, userId);
+    if (!hash) return c.json({ error: "unauthorized" }, 401);
+    if (!(await verifySecret(currentPassword, hash))) {
+      return c.json({ error: "current password is incorrect" }, 400);
+    }
+    // Reject a no-op change so "signed out everywhere" can't be triggered
+    // without actually rotating the secret.
+    if (await verifySecret(newPassword, hash)) {
+      return c.json({ error: "new password must be different from the current one" }, 400);
+    }
+
+    const newHash = await hashSecret(newPassword);
+    await updatePasswordHash(sql, userId, newHash);
+    // Sign out every other session for this user, keeping the acting one.
+    const currentSessionId = getCookie(c, SESSION_COOKIE);
+    if (currentSessionId) await deleteOtherSessions(sql, userId, currentSessionId);
+    await logAudit(sql, { eventType: "password_changed", actorUserId: userId, ip: clientIp(c) });
+    return c.json({ ok: true }, 200);
+  });
+
   app.get("/api/v1/users", requireUser(sql), requireAdmin(sql), async (c) => {
     const users = await listUsers(sql);
     return c.json(
@@ -192,6 +237,35 @@ export function userRoutes(sql: Sql, registry: Registry): Hono<{ Variables: Auth
       },
       200,
     );
+  });
+
+  app.patch("/api/v1/users/:id", requireUser(sql), requireAdmin(sql), async (c) => {
+    const parsed = setAdminSchema.safeParse(await parseJsonBody(c));
+    if (!parsed.success) return c.json({ error: "invalid request" }, 400);
+    const targetId = c.req.param("id");
+    const target = await findUserById(sql, targetId);
+    if (!target) return c.json({ error: "not found" }, 404);
+
+    const { isAdmin } = parsed.data;
+    // Last-admin guard: demoting the only remaining admin would leave nobody
+    // able to manage users, and admin can only be regranted by an admin.
+    if (!isAdmin && target.is_admin) {
+      const { admins } = await countUsersAndAdmins(sql);
+      if (admins <= 1) return c.json({ error: "cannot remove the last admin" }, 400);
+    }
+
+    // Check the row-count return (matches DELETE /api/v1/users/:id): if the
+    // target vanished between findUserById and here (concurrent admin
+    // action), 404 instead of logging a role change that never happened.
+    const updated = await setUserAdmin(sql, targetId, isAdmin);
+    if (!updated) return c.json({ error: "not found" }, 404);
+    await logAudit(sql, {
+      eventType: "user_role_changed",
+      actorUserId: c.get("userId"),
+      target: targetId,
+      metadata: { isAdmin },
+    });
+    return c.json({ id: target.id, email: target.email, isAdmin }, 200);
   });
 
   app.post("/api/v1/auth/bootstrap", async (c) => {

@@ -28,3 +28,10 @@ export async function readSession(sql: Sql, id: string): Promise<{ userId: strin
 export async function destroySession(sql: Sql, id: string): Promise<void> {
   await sql`delete from user_sessions where id = ${id}`;
 }
+
+// Deletes every session for the user except the one to keep -- used on
+// password change to sign the user out of all other sessions while leaving
+// the acting session (identified by its current cookie) valid.
+export async function deleteOtherSessions(sql: Sql, userId: string, keepSessionId: string): Promise<void> {
+  await sql`delete from user_sessions where user_id = ${userId} and id != ${keepSessionId}`;
+}

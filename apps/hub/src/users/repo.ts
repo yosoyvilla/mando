@@ -79,3 +79,21 @@ export async function countUsersAndAdmins(sql: Sql): Promise<{ total: number; ad
   `;
   return { total: row.total as number, admins: row.admins as number };
 }
+
+// Reads only the password hash for one user (by id), for the change-password
+// re-auth check. Kept separate from findUserById, which never selects the
+// hash so its User result can be handed to clients safely.
+export async function getPasswordHash(sql: Sql, userId: string): Promise<string | null> {
+  const rows = await sql`select password_hash from users where id = ${userId}`;
+  return (rows[0]?.password_hash as string) ?? null;
+}
+
+export async function updatePasswordHash(sql: Sql, userId: string, hash: string): Promise<boolean> {
+  const rows = await sql`update users set password_hash = ${hash} where id = ${userId} returning id`;
+  return rows.length > 0;
+}
+
+export async function setUserAdmin(sql: Sql, userId: string, isAdmin: boolean): Promise<boolean> {
+  const rows = await sql`update users set is_admin = ${isAdmin} where id = ${userId} returning id`;
+  return rows.length > 0;
+}
