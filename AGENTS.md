@@ -126,10 +126,55 @@ exposed to the network.
   given literally or reached via DNS (including IPv4-mapped IPv6) — called
   both when the URL is saved AND again immediately before every outbound
   request with `redirect:"error"`, since a hostname that resolved safely at
-  save time can rebind to a private address later. Generated images are
-  stored as Postgres `bytea` (`generated_images` table), rejected before
-  insert if over a 10MB cap, and retained at most 50 per user — oldest
-  deleted automatically once a new insert exceeds that.
+  save time can rebind to a private address later. The same guard covers
+  EVERY outbound call to the user's provider, not just images: chat
+  completions (`chat/provider-client.ts`) and the model list proxy
+  (`providers/model-client.ts`, `GET /api/v1/provider/models`) copy the same
+  guard-then-`redirect:"error"` pattern verbatim.
+- **Generated images live on disk, not in Postgres.** `generated_images`
+  stores `file_path`/`mime`/`size_bytes` per row; the bytes themselves are
+  files under `MANDO_IMAGE_DIR` (`apps/hub/src/images/storage.ts`), rejected
+  before write if over a 10MB cap (`IMAGE_MAX_BYTES`,
+  `images/provider-client.ts`). Every file is named by a server-generated
+  UUID ONLY (`images/repo.ts`'s `createImage` mints it; never derived from
+  user input), and `storage.ts`'s `resolveWithinDir` asserts the resolved
+  path stays inside `MANDO_IMAGE_DIR` by comparing `realpath`-normalized
+  strings — not a string-prefix check — so a symlink swapped into that
+  directory (or an ancestor of it) after `mkdir` still can't escape it. Write
+  order on create is file-first, DB-row-second (a crash between the two
+  leaks a file, not an orphaned row pointing at nothing); delete order is
+  the opposite, DB-row-first, then unlink (a crash leaks a file, never
+  leaves a row pointing at a missing one) — both `deleteImage` and
+  `retainImages` follow this delete ordering. Retention is dual and either
+  condition alone triggers deletion: `retainImages` (`images/repo.ts`, run from
+  `retention.ts` on the same interval as the rest of the hub's retention
+  sweep) deletes any image older than `MANDO_IMAGE_RETENTION_DAYS` (default
+  7) OR beyond the newest `MANDO_IMAGE_MAX_PER_USER` (default 100) for its
+  user, oldest first. `provider-client.ts` sniffs the real mime from the
+  provider's response bytes via magic numbers (png/jpeg/webp/gif) rather
+  than trusting a claimed content-type, so `:id/raw` always serves the
+  correct `Content-Type` (plus `X-Content-Type-Options: nosniff`).
+- **Chat is a standalone, user-scoped surface — streamed, not polled.**
+  `apps/hub/src/chat/routes.ts`'s `POST /api/v1/chat/conversations/:id/messages`
+  persists the user message (with any attachments) first, then streams the
+  assistant's reply to the browser with `hono/streaming`'s `streamSSE`
+  (`user_message` / `delta` / `error` / `done` events), and only appends the
+  final assistant row once the stream completes — an error mid-stream never
+  persists a partial assistant message. `chat/provider-client.ts` calls the
+  same guard-then-`redirect:"error"` SSRF pattern as images before opening
+  the streaming request, then parses the provider's OpenAI-shaped SSE
+  (`data: {choices:[{delta:{content}}]}` ... `data: [DONE]`) into content
+  deltas. Vision attachments ride as `{type:"image_url",image_url:{url}}`
+  content parts alongside `{type:"text"}` on user messages only (assistant
+  replies are always persisted as plain text); caps mirror the session
+  composer's own (`apps/web/src/lib/attachments.ts`): 4 files, 8MB total per
+  message, enforced again server-side rather than trusted from the client.
+  Like images, the whole surface 503s `{error:"images_disabled"}` when
+  `MANDO_ENCRYPTION_KEY` is unset, and every route is `requireUser`-scoped —
+  no machine or tunnel involved. `POST .../messages` is rate-limited per IP
+  per window like the images endpoints, overridable with
+  `MANDO_RATE_LIMIT_CHAT_MAX` (`config.ts`; same override pattern as
+  `MANDO_RATE_LIMIT_IMAGES_MAX`).
 - **No emojis** anywhere — code, comments, docs, commit messages, CLI output.
 - **Commits:** single-line message, no co-author trailer, no session/URL
   trailers, one commit per logical change.

@@ -87,6 +87,20 @@ spec:
             # (below) makes every other path on this container read-only.
             - name: MANDO_IMAGE_DIR
               value: /data/images
+            # Optional: overrides the scheduled retention sweep's defaults
+            # (7 days, 100 images per user -- config.ts). Either condition
+            # alone deletes an image (file + row).
+            # - name: MANDO_IMAGE_RETENTION_DAYS
+            #   value: "7"
+            # - name: MANDO_IMAGE_MAX_PER_USER
+            #   value: "100"
+            # Optional: overrides the Chat feature's per-IP rate limit
+            # (default: a safe built-in limit, same override pattern as
+            # MANDO_RATE_LIMIT_IMAGES_MAX) -- each chat message calls your
+            # configured provider, so this bounds outbound traffic/spend
+            # per window.
+            # - name: MANDO_RATE_LIMIT_CHAT_MAX
+            #   value: "20"
           resources:
             requests:
               cpu: 100m
